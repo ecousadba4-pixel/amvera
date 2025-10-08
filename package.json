@@ -1,7 +1,7 @@
 {
   "name": "hotel-backend",
   "version": "1.0.0",
-  "description": "Backend for hotel guest management system",
+  "description": "Hotel Guests API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,6 +13,6 @@
     "pg": "^8.11.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
