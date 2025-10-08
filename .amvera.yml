@@ -1,0 +1,17 @@
+application: hotel-backend
+runtime: nodejs
+version: 18
+
+build:
+  - npm install
+
+run:
+  command: npm start
+
+expose:
+  - port: 3000
+    protocol: http
+
+resources:
+  memory: 512
+  cpu: 500m
