@@ -1,17 +1,15 @@
-application: hotel-backend
+name: u4s-loyalty
 runtime: nodejs
 version: 18
 
 build:
-  - npm install
+  commands:
+    - npm ci --only=production
 
 run:
-  command: npm start
+  command: node server.js  # Явно указываем Node.js
 
-expose:
-  - port: 3000
-    protocol: http
-
-resources:
-  memory: 512
-  cpu: 500m
+endpoints:
+  www:
+    http:
+      port: 3000
