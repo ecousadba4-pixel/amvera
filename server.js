@@ -1,4 +1,5 @@
 const express = require('express');
+const helmet = require('helmet');
 const cors = require('cors');
 const { Pool } = require('pg');
 const cookieParser = require('cookie-parser');
@@ -253,5 +254,6 @@ app.listen(PORT, () => {
   console.log(`📍 Health check: /health`);
   console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
 });
+
 
 
