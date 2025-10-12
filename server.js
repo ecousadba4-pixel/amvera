@@ -20,8 +20,8 @@ const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const API_TIMEOUT = Number(process.env.API_TIMEOUT) || 30000;
 const PG_SSL = process.env.PG_SSL === 'true';
 
-// Trust proxy if behind proxy/load balancer
-app.enable('trust proxy');
+// Trust proxy для Amvera/cloud (корректная, безопасная конфигурация)
+app.set('trust proxy', 1);
 
 // Cookie Parser
 app.use(cookieParser(COOKIE_SECRET));
@@ -254,5 +254,3 @@ app.listen(PORT, () => {
   console.log(`📍 Health check: /health`);
   console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
 });
-
-
