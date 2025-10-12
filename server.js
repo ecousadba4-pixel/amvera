@@ -5,11 +5,25 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Настраиваем whitelist доменов – разрешайте только свои фронтенды!
+const allowedOrigins = [
+  'https://usadba4.ru',
+  // 'https://admin.usadba4.ru' // если потребуется доступ для админки – раскомментируйте
+];
+
 // Middleware
 app.use(cors({
-  origin: '*', // Можно указать конкретные домены
+  origin: (origin, callback) => {
+    // Разрешаем запросы только с нужных origin или с серверной части (origin = undefined)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Origin not allowed by CORS policy'), false);
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true // если нужно поддерживать авторизацию через куки/JWT
 }));
 app.use(express.json());
 
