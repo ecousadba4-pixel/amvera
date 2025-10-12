@@ -49,10 +49,13 @@ app.use(cors({
 // JSON body parser
 app.use(express.json());
 
-// Подключение к Neon PostgreSQL
+// Подключение к Neon PostgreSQL - безопасно!
+const isProduction = NODE_ENV === 'production';
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: PG_SSL ? { rejectUnauthorized: false } : false
+  ssl: isProduction
+    ? { rejectUnauthorized: true }
+    : (PG_SSL ? { rejectUnauthorized: false } : false)
 });
 
 // Проверка работы сервера
@@ -86,7 +89,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Добавление гостя в таблицу guests
+// Добавление гостя
 app.post('/api/guests', async (req, res) => {
   try {
     const {
@@ -119,9 +122,9 @@ app.post('/api/guests', async (req, res) => {
     }
 
     const query = `
-      INSERT INTO guests 
-      (guest_phone, last_name, first_name, checkin_date, loyalty_level, 
-       shelter_booking_id, total_amount, bonus_spent)
+      INSERT INTO guests
+      (guest_phone, last_name, first_name, checkin_date, loyalty_level,
+      shelter_booking_id, total_amount, bonus_spent)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
     `;
@@ -136,7 +139,6 @@ app.post('/api/guests', async (req, res) => {
       parseFloat(total_amount) || 0,
       parseInt(bonus_spent) || 0
     ];
-
     const result = await pool.query(query, values);
 
     res.json({
@@ -144,7 +146,6 @@ app.post('/api/guests', async (req, res) => {
       message: '✅ Данные гостя успешно добавлены в базу!',
       data: result.rows[0]
     });
-
   } catch (error) {
     if (LOG_LEVEL === 'debug') console.error('Ошибка при добавлении гостя:', error);
     res.status(500).json({
@@ -154,7 +155,7 @@ app.post('/api/guests', async (req, res) => {
   }
 });
 
-// Поиск гостя в таблице bonuses_balance для автозаполнения формы
+// Поиск бонусов по телефону
 app.get('/api/bonuses/search', async (req, res) => {
   try {
     const { phone } = req.query;
@@ -164,22 +165,21 @@ app.get('/api/bonuses/search', async (req, res) => {
         message: 'Не указан номер телефона для поиска'
       });
     }
-
     const normalizedPhone = phone.replace(/\D/g, '').slice(-10);
 
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         phone as guest_phone,
         last_name,
-        first_name, 
+        first_name,
         loyalty_level,
         bonus_balances as current_balance,
         visits_total as visits_count,
         last_date_visit as last_visit_date
-       FROM bonuses_balance 
-       WHERE phone = $1 
-       ORDER BY last_date_visit DESC 
-       LIMIT 1`,
+      FROM bonuses_balance
+      WHERE phone = $1
+      ORDER BY last_date_visit DESC
+      LIMIT 1`,
       [normalizedPhone]
     );
 
@@ -187,7 +187,6 @@ app.get('/api/bonuses/search', async (req, res) => {
       success: true,
       data: result.rows.length ? result.rows[0] : null
     });
-
   } catch (error) {
     if (LOG_LEVEL === 'debug') console.error('Ошибка при поиске гостя в bonuses_balance:', error);
     res.status(500).json({
@@ -197,7 +196,7 @@ app.get('/api/bonuses/search', async (req, res) => {
   }
 });
 
-// Получение всех гостей из таблицы guests (для админки)
+// Получение всех гостей (админка)
 app.get('/api/guests', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM guests ORDER BY created_at DESC LIMIT 100');
@@ -214,7 +213,7 @@ app.get('/api/guests', async (req, res) => {
   }
 });
 
-// Получение всех данных из bonuses_balance (для админки)
+// Получение всех бонусов (админка)
 app.get('/api/bonuses', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM bonuses_balance ORDER BY last_date_visit DESC LIMIT 100');
@@ -254,3 +253,5 @@ app.listen(PORT, () => {
   console.log(`📍 Health check: /health`);
   console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
 });
+
+
