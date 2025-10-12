@@ -51,13 +51,13 @@ app.use(cors({
 app.use(express.json());
 
 // Подключение к Neon PostgreSQL - безопасно!
+// Безопасная и строгая версия без шансов для ошибки
 const isProduction = NODE_ENV === 'production';
-const pool = new Pool({
+const poolConfig = {
   connectionString: DATABASE_URL,
-  ssl: isProduction
-    ? { rejectUnauthorized: true }
-    : (PG_SSL ? { rejectUnauthorized: false } : false)
-});
+  ssl: isProduction ? { rejectUnauthorized: true } : false
+};
+const pool = new Pool(poolConfig);
 
 // Проверка работы сервера
 app.get('/', (req, res) => {
@@ -254,6 +254,7 @@ app.listen(PORT, () => {
   console.log(`📍 Health check: /health`);
   console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
 });
+
 
 
 
