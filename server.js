@@ -5,16 +5,15 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Настраиваем whitelist доменов – разрешайте только свои фронтенды!
+// Whitelist домены (разрешены только ваши фронтенды)
 const allowedOrigins = [
   'https://usadba4.ru',
-  // 'https://admin.usadba4.ru' // если потребуется доступ для админки – раскомментируйте
+  // 'https://admin.usadba4.ru' // добавить, если нужна админка
 ];
 
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    // Разрешаем запросы только с нужных origin или с серверной части (origin = undefined)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -23,7 +22,7 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true // если нужно поддерживать авторизацию через куки/JWT
+  credentials: true // Если нужны куки/авторизация
 }));
 app.use(express.json());
 
@@ -77,8 +76,6 @@ app.post('/api/guests', async (req, res) => {
       bonus_spent
     } = req.body;
 
-    console.log('📥 Получены данные:', req.body);
-
     // Валидация обязательных полей
     if (!guest_phone || !last_name || !first_name) {
       return res.status(400).json({
@@ -93,12 +90,9 @@ app.post('/api/guests', async (req, res) => {
       const parts = checkin_date.split('.');
       if (parts.length === 3) {
         const [day, month, year] = parts;
-        // Создаем дату в формате YYYY-MM-DD для PostgreSQL
         parsedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
       }
     }
-
-    console.log('📅 Преобразованная дата:', parsedDate);
 
     const query = `
       INSERT INTO guests 
@@ -119,10 +113,8 @@ app.post('/api/guests', async (req, res) => {
       parseInt(bonus_spent) || 0
     ];
 
-    console.log('💾 Данные для INSERT:', values);
-
     const result = await pool.query(query, values);
-    
+
     res.json({
       success: true,
       message: '✅ Данные гостя успешно добавлены в базу!',
@@ -133,8 +125,7 @@ app.post('/api/guests', async (req, res) => {
     console.error('Ошибка при добавлении гостя:', error);
     res.status(500).json({
       success: false,
-      message: '❌ Ошибка при добавлении гостя',
-      error: error.message
+      message: '❌ Ошибка при добавлении гостя'
     });
   }
 });
@@ -143,9 +134,6 @@ app.post('/api/guests', async (req, res) => {
 app.get('/api/bonuses/search', async (req, res) => {
   try {
     const { phone } = req.query;
-    
-    console.log('🔍 Запрос поиска гостя:', phone);
-    
     if (!phone) {
       return res.status(400).json({
         success: false,
@@ -154,8 +142,7 @@ app.get('/api/bonuses/search', async (req, res) => {
     }
 
     const normalizedPhone = phone.replace(/\D/g, '').slice(-10);
-    console.log('📱 Нормализованный номер:', normalizedPhone);
-    
+
     const result = await pool.query(
       `SELECT 
         phone as guest_phone,
@@ -171,8 +158,6 @@ app.get('/api/bonuses/search', async (req, res) => {
        LIMIT 1`,
       [normalizedPhone]
     );
-
-    console.log('📊 Результат SQL запроса:', result.rows);
 
     if (result.rows.length > 0) {
       res.json({
@@ -190,8 +175,7 @@ app.get('/api/bonuses/search', async (req, res) => {
     console.error('Ошибка при поиске гостя в bonuses_balance:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при поиске гостя',
-      error: error.message
+      message: 'Ошибка при поиске гостя'
     });
   }
 });
@@ -200,7 +184,6 @@ app.get('/api/bonuses/search', async (req, res) => {
 app.get('/api/guests', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM guests ORDER BY created_at DESC LIMIT 100');
-    
     res.json({
       success: true,
       data: result.rows
@@ -209,8 +192,7 @@ app.get('/api/guests', async (req, res) => {
     console.error('Ошибка при получении гостей:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при получении списка гостей',
-      error: error.message
+      message: 'Ошибка при получении списка гостей'
     });
   }
 });
@@ -219,7 +201,6 @@ app.get('/api/guests', async (req, res) => {
 app.get('/api/bonuses', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM bonuses_balance ORDER BY last_date_visit DESC LIMIT 100');
-    
     res.json({
       success: true,
       data: result.rows
@@ -228,8 +209,7 @@ app.get('/api/bonuses', async (req, res) => {
     console.error('Ошибка при получении данных bonuses_balance:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при получении данных бонусов',
-      error: error.message
+      message: 'Ошибка при получении данных бонусов'
     });
   }
 });
@@ -247,8 +227,9 @@ app.use((error, req, res, next) => {
   console.error('Необработанная ошибка:', error);
   res.status(500).json({
     success: false,
-    message: 'Внутренняя ошибка сервера',
-    error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    message: 'Внутренняя ошибка сервера'
+    // error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    // В продакшене не отдаём подробности пользователю!
   });
 });
 
