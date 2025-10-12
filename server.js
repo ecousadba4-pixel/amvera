@@ -1,20 +1,41 @@
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
+
+// Переменные окружения
 const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const DATABASE_URL = process.env.DATABASE_URL;
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+  : ['https://usadba4.ru'];
+const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
+const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const API_TIMEOUT = Number(process.env.API_TIMEOUT) || 30000;
+const PG_SSL = process.env.PG_SSL === 'true';
 
-// Whitelist домены (разрешены только ваши фронтенды)
-const allowedOrigins = [
-  'https://usadba4.ru',
-  // 'https://admin.usadba4.ru' // добавить, если нужна админка
-];
+// Trust proxy if behind proxy/load balancer
+app.enable('trust proxy');
 
-// Middleware
+// Cookie Parser
+app.use(cookieParser(COOKIE_SECRET));
+
+// Rate Limit
+app.use(rateLimit({
+  windowMs: RATE_LIMIT_WINDOW,
+  max: RATE_LIMIT_MAX
+}));
+
+// CORS Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Origin not allowed by CORS policy'), false);
@@ -22,23 +43,26 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true // Если нужны куки/авторизация
+  credentials: true
 }));
+
+// JSON body parser
 app.use(express.json());
 
 // Подключение к Neon PostgreSQL
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  connectionString: DATABASE_URL,
+  ssl: PG_SSL ? { rejectUnauthorized: false } : false
 });
 
 // Проверка работы сервера
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     message: '🚀 Hotel Guests API работает на Amvera!',
     status: 'OK',
     database: 'Neon PostgreSQL',
-    provider: 'Amvera'
+    provider: 'Amvera',
+    build: process.env.BUILD_VERSION || 'dev'
   });
 });
 
@@ -46,17 +70,17 @@ app.get('/', (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ 
-      status: '✅ OK', 
+    res.json({
+      status: '✅ OK',
       database: 'Connected',
       timestamp: new Date().toISOString(),
       provider: 'Amvera'
     });
   } catch (error) {
-    res.status(500).json({ 
-      status: '❌ Error', 
+    res.status(500).json({
+      status: '❌ Error',
       database: 'Disconnected',
-      error: error.message,
+      error: NODE_ENV === 'development' ? error.message : 'DB connection error',
       provider: 'Amvera'
     });
   }
@@ -122,10 +146,10 @@ app.post('/api/guests', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Ошибка при добавлении гостя:', error);
+    if (LOG_LEVEL === 'debug') console.error('Ошибка при добавлении гостя:', error);
     res.status(500).json({
       success: false,
-      message: '❌ Ошибка при добавлении гостя'
+      message: NODE_ENV === 'development' ? error.message : '❌ Ошибка при добавлении гостя'
     });
   }
 });
@@ -159,23 +183,16 @@ app.get('/api/bonuses/search', async (req, res) => {
       [normalizedPhone]
     );
 
-    if (result.rows.length > 0) {
-      res.json({
-        success: true,
-        data: result.rows[0]
-      });
-    } else {
-      res.json({
-        success: true,
-        data: null
-      });
-    }
+    res.json({
+      success: true,
+      data: result.rows.length ? result.rows[0] : null
+    });
 
   } catch (error) {
-    console.error('Ошибка при поиске гостя в bonuses_balance:', error);
+    if (LOG_LEVEL === 'debug') console.error('Ошибка при поиске гостя в bonuses_balance:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при поиске гостя'
+      message: NODE_ENV === 'development' ? error.message : 'Ошибка при поиске гостя'
     });
   }
 });
@@ -189,10 +206,10 @@ app.get('/api/guests', async (req, res) => {
       data: result.rows
     });
   } catch (error) {
-    console.error('Ошибка при получении гостей:', error);
+    if (LOG_LEVEL === 'debug') console.error('Ошибка при получении гостей:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при получении списка гостей'
+      message: NODE_ENV === 'development' ? error.message : 'Ошибка при получении списка гостей'
     });
   }
 });
@@ -206,10 +223,10 @@ app.get('/api/bonuses', async (req, res) => {
       data: result.rows
     });
   } catch (error) {
-    console.error('Ошибка при получении данных bonuses_balance:', error);
+    if (LOG_LEVEL === 'debug') console.error('Ошибка при получении данных bonuses_balance:', error);
     res.status(500).json({
       success: false,
-      message: 'Ошибка при получении данных бонусов'
+      message: NODE_ENV === 'development' ? error.message : 'Ошибка при получении данных бонусов'
     });
   }
 });
@@ -222,20 +239,20 @@ app.use('*', (req, res) => {
   });
 });
 
-// Обработка ошибок
+// Глобальная обработка ошибок
 app.use((error, req, res, next) => {
-  console.error('Необработанная ошибка:', error);
+  if (LOG_LEVEL === 'debug') console.error('Необработанная ошибка:', error);
   res.status(500).json({
     success: false,
-    message: 'Внутренняя ошибка сервера'
-    // error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
-    // В продакшене не отдаём подробности пользователю!
+    message: NODE_ENV === 'development' ? error.message : 'Внутренняя ошибка сервера'
   });
 });
 
 // Запуск сервера
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на Amvera на порту ${PORT}`);
-  console.log(`📍 Health check: https://your-app.amvera.io/health`);
-  console.log(`📍 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not connected'}`);
+  console.log(`📍 Health check: /health`);
+  console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
 });
+
+
