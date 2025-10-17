@@ -4,12 +4,13 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
+const crypto = require('crypto'); // Для SHA-256
 
 const app = express();
 
 // Переменные окружения
 const PORT = process.env.PORT || 3000;
-const NODE_ENV = process.env.NODE_ENV || 'production'; // production по умолчанию
+const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATABASE_URL = process.env.DATABASE_URL;
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
@@ -18,24 +19,22 @@ const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
-const API_TIMEOUT = Number(process.env.API_TIMEOUT) || 30000;
 
 // Trust proxy для Amvera/cloud
 app.set('trust proxy', 1);
 
-// Helmet — защита HTTP-заголовков!
+// Middleware
 app.use(helmet());
-
-// Cookie Parser
 app.use(cookieParser(COOKIE_SECRET));
+app.use(express.json({ limit: '1mb' }));
 
-// Rate Limit
+// Rate limiting
 app.use(rateLimit({
   windowMs: RATE_LIMIT_WINDOW,
   max: RATE_LIMIT_MAX
 }));
 
-// CORS с ограничением доменов
+// CORS
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) {
@@ -49,14 +48,18 @@ app.use(cors({
   credentials: true
 }));
 
-// JSON body parser
-app.use(express.json({ limit: '1mb' }));
-
-// Подключение к Neon PostgreSQL — строго production-only SSL!
+// Подключение к БД
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: NODE_ENV === 'production' ? { rejectUnauthorized: true } : false
 });
+
+// Вспомогательная функция SHA-256
+function sha256(str) {
+  return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
+// === ЭНДПОИНТЫ ===
 
 // Health-check
 app.get('/health', async (req, res) => {
@@ -76,7 +79,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Проверка работы
+// Главная страница
 app.get('/', (req, res) => {
   res.json({
     message: '🚀 Hotel Guests API работает!',
@@ -86,7 +89,42 @@ app.get('/', (req, res) => {
   });
 });
 
-// Добавление гостя (валидация!)
+// 🔐 Аутентификация (новый эндпоинт)
+app.post('/api/auth', (req, res) => {
+  const { password } = req.body;
+
+  if (!password || typeof password !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Пароль обязателен'
+    });
+  }
+
+  const hash = sha256(password.trim());
+  const VALID_HASH = process.env.PASSWORD_HASH;
+
+  if (!VALID_HASH) {
+    console.error('❌ Переменная PASSWORD_HASH не задана в окружении!');
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка конфигурации сервера'
+    });
+  }
+
+  if (hash === VALID_HASH) {
+    return res.status(200).json({
+      success: true,
+      message: 'Доступ разрешён'
+    });
+  } else {
+    return res.status(401).json({
+      success: false,
+      message: 'Неверный пароль'
+    });
+  }
+});
+
+// Добавление гостя
 app.post('/api/guests', async (req, res) => {
   try {
     const {
@@ -119,7 +157,7 @@ app.post('/api/guests', async (req, res) => {
     const query = `
       INSERT INTO guests
       (guest_phone, last_name, first_name, checkin_date, loyalty_level,
-      shelter_booking_id, total_amount, bonus_spent)
+       shelter_booking_id, total_amount, bonus_spent)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
     `;
@@ -134,6 +172,7 @@ app.post('/api/guests', async (req, res) => {
       parseFloat(total_amount) || 0,
       parseInt(bonus_spent) || 0
     ];
+
     const result = await pool.query(query, values);
 
     res.json({
@@ -225,13 +264,15 @@ app.get('/api/bonuses', async (req, res) => {
   }
 });
 
-// 404 и ошибка
+// 404
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
     message: '🚫 Маршрут не найден'
   });
 });
+
+// Обработчик ошибок
 app.use((error, req, res, next) => {
   if (LOG_LEVEL === 'debug') console.error('Необработанная ошибка:', error);
   res.status(500).json({
@@ -240,9 +281,9 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Запуск сервера
+// Запуск
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на Amvera, порт ${PORT}`);
   console.log(`📍 Health check: /health`);
-  console.log(`📍 Database: ${DATABASE_URL ? 'Connected' : 'Not connected'}`);
+  console.log(`📍 Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
 });
