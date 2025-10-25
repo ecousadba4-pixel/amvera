@@ -125,10 +125,18 @@ app.post('/api/auth', (req, res) => {
   );
   const candidateHashes = candidatePasswords.map(pw => sha256(pw));
 
-  const normalizeHash = (hashValue) =>
-    typeof hashValue === 'string'
-      ? hashValue.trim().toLowerCase().replace(/\s+/g, '')
-      : undefined;
+  const normalizeHash = (hashValue) => {
+    if (typeof hashValue !== 'string') {
+      return undefined;
+    }
+
+    let normalized = hashValue.trim().toLowerCase().replace(/\s+/g, '');
+
+    normalized = normalized.replace(/^(sha-?256[:=]?)/, '');
+    normalized = normalized.replace(/^0x/, '');
+
+    return normalized;
+  };
 
   const VALID_HASH = normalizeHash(process.env.PASSWORD_HASH);
 
