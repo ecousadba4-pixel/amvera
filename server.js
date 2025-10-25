@@ -108,18 +108,28 @@ app.post('/api/auth', (req, res) => {
     });
   }
 
-  const hash = sha256(password.trim());
-  const VALID_HASH = process.env.PASSWORD_HASH;
+  const sanitizedPassword = password.trim();
+  const hash = sha256(sanitizedPassword);
+  const VALID_HASH = process.env.PASSWORD_HASH
+    ? process.env.PASSWORD_HASH.trim().toLowerCase()
+    : undefined;
+  const LEGACY_PASSWORD =
+    process.env.AUTH_PASSWORD ||
+    process.env.ADMIN_PASSWORD ||
+    process.env.PASSWORD;
 
-  if (!VALID_HASH) {
-    console.error('❌ Переменная PASSWORD_HASH не задана в окружении!');
+  if (!VALID_HASH && !LEGACY_PASSWORD) {
+    console.error('❌ Не задан ни PASSWORD_HASH, ни один из резервных паролей (AUTH_PASSWORD / ADMIN_PASSWORD / PASSWORD)');
     return res.status(500).json({
       success: false,
       message: 'Ошибка конфигурации сервера'
     });
   }
 
-  if (hash === VALID_HASH) {
+  const hashMatches = VALID_HASH && hash === VALID_HASH;
+  const legacyMatches = LEGACY_PASSWORD && sanitizedPassword === LEGACY_PASSWORD;
+
+  if (hashMatches || legacyMatches) {
     return res.status(200).json({
       success: true,
       message: 'Доступ разрешён'
