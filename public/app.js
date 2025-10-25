@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND_HOST = 'usadba4.ru';
+const DEFAULT_BACKEND_HOST = 'u4s-loyalty-karinausadba.amvera.io';
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '']);
 
 const normalizeBase = (value) => {
