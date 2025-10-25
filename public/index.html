@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Учет выезда гостя</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="centered">
+      <div id="password-block" class="card password-card fade">
+        <h2 id="title-auth">Вход в систему</h2>
+        <label for="pass" class="form-label" id="label-password">Введите пароль:</label>
+        <input id="pass" class="form-input" placeholder="Пароль" />
+        <button id="enterBtn" class="form-button">Войти</button>
+        <div id="wrong-pass" class="error hidden">Неверный пароль!</div>
+      </div>
+      <div id="form-block" class="form-container hidden">
+        <h2 id="title-main">Учет выезда гостя</h2>
+        <div class="form-group">
+          <label id="label-phone">Телефон гостя:</label>
+          <input
+            id="guest_phone"
+            class="form-input"
+            placeholder="+7 (XXX) XXX-XX-XX"
+            inputmode="tel"
+            autocomplete="tel"
+          />
+          <div id="help-phone" class="help-text">Формат: +7 и далее 10 цифр</div>
+        </div>
+        <div id="searching-guest" class="searching-block hidden">🔍 Поиск гостя...</div>
+        <div id="phone-error" class="phone-error-block hidden">⚠️ Неверный формат номера</div>
+        <div id="guest-info" class="info-block hidden">
+          <div class="info-item"><b>Баланс:</b> <span id="balance-points">0</span></div>
+          <div class="info-item"><b>Визиты:</b> <span id="visits-count">0</span></div>
+          <div class="info-item"><b>Последний визит:</b> <span id="last-visit">-</span></div>
+        </div>
+        <div id="new-guest-info" class="new-guest-block hidden">⚠️ Новый гость — добавьте его данные</div>
+        <div class="form-group">
+          <label for="last_name">Фамилия:</label>
+          <input id="last_name" class="form-input" autocomplete="family-name" />
+        </div>
+        <div class="form-group">
+          <label for="first_name">Имя:</label>
+          <input id="first_name" class="form-input" autocomplete="given-name" />
+        </div>
+        <div class="form-group">
+          <label for="checkin_date">Дата заезда:</label>
+          <input type="date" id="checkin_date" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label for="loyalty_level">Уровень лояльности:</label>
+          <input id="loyalty_level" class="form-input" readonly />
+        </div>
+        <div class="form-group">
+          <label for="shelter_booking_id">Номер бронирования Shelter:</label>
+          <input id="shelter_booking_id" class="form-input" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label for="total_amount">Сумма при выезде (до вычета баллов):</label>
+          <input id="total_amount" class="form-input" type="number" min="0" step="0.01" />
+        </div>
+        <div class="form-group">
+          <label for="bonus_spent">Сумма списанных ранее накопленных баллов:</label>
+          <input id="bonus_spent" class="form-input" type="number" min="0" step="1" />
+        </div>
+        <button id="submitBtn" class="form-button">Добавить</button>
+        <button id="nextGuestBtn" class="form-button secondary-button hidden">Следующий гость</button>
+        <div id="message" class="hidden"></div>
+      </div>
+    </div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
