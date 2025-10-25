@@ -67,7 +67,6 @@ const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
-const AUTH_DISABLED = String(process.env.DISABLE_AUTH || '').toLowerCase() === 'true';
 const STATIC_DIR = path.join(__dirname, 'public');
 
 // Trust proxy для Amvera/cloud
@@ -137,7 +136,7 @@ app.get('/health', async (req, res) => {
 
 app.get('/api/config', (req, res) => {
   res.json({
-    authDisabled: AUTH_DISABLED
+    authDisabled: false
   });
 });
 
@@ -153,17 +152,6 @@ app.get('/', (req, res) => {
 
 // 🔐 Аутентификация (новый эндпоинт)
 app.post('/api/auth', (req, res) => {
-  if (AUTH_DISABLED) {
-    if (LOG_LEVEL !== 'silent') {
-      console.warn('⚠️  Password authentication temporarily disabled via DISABLE_AUTH=true');
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Аутентификация временно отключена'
-    });
-  }
-
   const { password } = req.body;
 
   if (!password || typeof password !== 'string') {
