@@ -205,37 +205,17 @@ app.post('/api/auth', (req, res) => {
 
   const VALID_HASH = normalizeHash(process.env.PASSWORD_HASH);
 
-  const legacySecrets = [];
-  [process.env.AUTH_PASSWORD, process.env.ADMIN_PASSWORD, process.env.PASSWORD]
-    .filter(secret => typeof secret === 'string' && secret.length > 0)
-    .forEach(secret => {
-      legacySecrets.push(secret);
-      const trimmed = secret.trim();
-      if (trimmed && trimmed !== secret) {
-        legacySecrets.push(trimmed);
-      }
-    });
-
-  const TEMP_FALLBACK_PASSWORD = '09011958'; // временный пароль для отладки
-  legacySecrets.push(TEMP_FALLBACK_PASSWORD);
-
-  if (!VALID_HASH && legacySecrets.length === 0) {
-    console.error('❌ Не задан ни PASSWORD_HASH, ни один из резервных паролей (AUTH_PASSWORD / ADMIN_PASSWORD / PASSWORD)');
+  if (!VALID_HASH) {
+    console.error('❌ Не задан PASSWORD_HASH для проверки пароля');
     return res.status(500).json({
       success: false,
       message: 'Ошибка конфигурации сервера'
     });
   }
 
-  const hashMatches = VALID_HASH
-    ? candidateHashes.some(hash => hash === VALID_HASH)
-    : false;
+  const hashMatches = candidateHashes.some(hash => hash === VALID_HASH);
 
-  const legacyMatches = legacySecrets.length > 0
-    ? candidatePasswords.some(pw => legacySecrets.includes(pw))
-    : false;
-
-  if (hashMatches || legacyMatches) {
+  if (hashMatches) {
     return res.status(200).json({
       success: true,
       message: 'Доступ разрешён'
