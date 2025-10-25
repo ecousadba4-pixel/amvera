@@ -108,17 +108,42 @@ app.post('/api/auth', (req, res) => {
     });
   }
 
-  const sanitizedPassword = password.trim();
-  const hash = sha256(sanitizedPassword);
-  const VALID_HASH = process.env.PASSWORD_HASH
-    ? process.env.PASSWORD_HASH.trim().toLowerCase()
-    : undefined;
-  const LEGACY_PASSWORD =
-    process.env.AUTH_PASSWORD ||
-    process.env.ADMIN_PASSWORD ||
-    process.env.PASSWORD;
+  const rawPassword = String(password);
+  const trimmedPassword = rawPassword.trim();
 
-  if (!VALID_HASH && !LEGACY_PASSWORD) {
+  if (!trimmedPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Пароль обязателен'
+    });
+  }
+
+  const candidatePasswords = Array.from(
+    new Set(
+      [rawPassword, trimmedPassword].filter(pw => typeof pw === 'string' && pw.length > 0)
+    )
+  );
+  const candidateHashes = candidatePasswords.map(pw => sha256(pw));
+
+  const normalizeHash = (hashValue) =>
+    typeof hashValue === 'string'
+      ? hashValue.trim().toLowerCase().replace(/\s+/g, '')
+      : undefined;
+
+  const VALID_HASH = normalizeHash(process.env.PASSWORD_HASH);
+
+  const legacySecrets = [];
+  [process.env.AUTH_PASSWORD, process.env.ADMIN_PASSWORD, process.env.PASSWORD]
+    .filter(secret => typeof secret === 'string' && secret.length > 0)
+    .forEach(secret => {
+      legacySecrets.push(secret);
+      const trimmed = secret.trim();
+      if (trimmed && trimmed !== secret) {
+        legacySecrets.push(trimmed);
+      }
+    });
+
+  if (!VALID_HASH && legacySecrets.length === 0) {
     console.error('❌ Не задан ни PASSWORD_HASH, ни один из резервных паролей (AUTH_PASSWORD / ADMIN_PASSWORD / PASSWORD)');
     return res.status(500).json({
       success: false,
@@ -126,8 +151,13 @@ app.post('/api/auth', (req, res) => {
     });
   }
 
-  const hashMatches = VALID_HASH && hash === VALID_HASH;
-  const legacyMatches = LEGACY_PASSWORD && sanitizedPassword === LEGACY_PASSWORD;
+  const hashMatches = VALID_HASH
+    ? candidateHashes.some(hash => hash === VALID_HASH)
+    : false;
+
+  const legacyMatches = legacySecrets.length > 0
+    ? candidatePasswords.some(pw => legacySecrets.includes(pw))
+    : false;
 
   if (hashMatches || legacyMatches) {
     return res.status(200).json({
