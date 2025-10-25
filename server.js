@@ -13,9 +13,56 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATABASE_URL = process.env.DATABASE_URL;
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-  : ['https://usadba4.ru'];
+const DEFAULT_BACKEND_HOST = 'u4s-loyalty-karinausadba.amvera.io';
+
+const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const createWildcardRegex = (pattern) =>
+  new RegExp(`^${pattern.split('*').map(escapeRegex).join('.*')}$`, 'i');
+
+const normalizeOriginsList = (raw) =>
+  raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://usadba4.ru',
+  'https://www.usadba4.ru',
+  `https://${DEFAULT_BACKEND_HOST}`,
+  'http://localhost',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1',
+  'http://127.0.0.1:3000'
+];
+
+const configuredOrigins = process.env.ALLOWED_ORIGINS
+  ? normalizeOriginsList(process.env.ALLOWED_ORIGINS)
+  : [];
+
+const UNIQUE_ALLOWED_ORIGINS = Array.from(
+  new Set([...DEFAULT_ALLOWED_ORIGINS, ...configuredOrigins])
+);
+
+const EXACT_ALLOWED_ORIGINS = new Set(
+  UNIQUE_ALLOWED_ORIGINS.filter((origin) => !origin.includes('*'))
+);
+
+const WILDCARD_ORIGINS = UNIQUE_ALLOWED_ORIGINS.filter((origin) =>
+  origin.includes('*')
+).map(createWildcardRegex);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) {
+    return true;
+  }
+
+  if (EXACT_ALLOWED_ORIGINS.has(origin)) {
+    return true;
+  }
+
+  return WILDCARD_ORIGINS.some((regex) => regex.test(origin));
+};
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
@@ -45,7 +92,7 @@ app.use(rateLimit({
 // CORS
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Origin not allowed by CORS policy'), false);
