@@ -391,5 +391,5 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на Amvera, порт ${PORT}`);
   console.log(`📍 Health check: /health`);
-  console.log(`📍 Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
+  console.log(`📍 Allowed origins: ${UNIQUE_ALLOWED_ORIGINS.join(', ')}`);
 });
