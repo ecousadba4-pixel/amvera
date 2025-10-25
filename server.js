@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const crypto = require('crypto'); // Для SHA-256
+const path = require('path');
 
 const app = express();
 
@@ -19,6 +20,7 @@ const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const STATIC_DIR = path.join(__dirname, 'public');
 
 // Trust proxy для Amvera/cloud
 app.set('trust proxy', 1);
@@ -27,6 +29,12 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cookieParser(COOKIE_SECRET));
 app.use(express.json({ limit: '1mb' }));
+
+// Статические ассеты для внутреннего фронтенда
+app.use('/app', express.static(STATIC_DIR));
+app.get('/app', (req, res) => {
+  res.sendFile(path.join(STATIC_DIR, 'index.html'));
+});
 
 // Rate limiting
 app.use(rateLimit({
@@ -100,18 +108,58 @@ app.post('/api/auth', (req, res) => {
     });
   }
 
-  const hash = sha256(password.trim());
-  const VALID_HASH = process.env.PASSWORD_HASH;
+  const rawPassword = String(password);
+  const trimmedPassword = rawPassword.trim();
 
-  if (!VALID_HASH) {
-    console.error('❌ Переменная PASSWORD_HASH не задана в окружении!');
+  if (!trimmedPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Пароль обязателен'
+    });
+  }
+
+  const candidatePasswords = Array.from(
+    new Set(
+      [rawPassword, trimmedPassword].filter(pw => typeof pw === 'string' && pw.length > 0)
+    )
+  );
+  const candidateHashes = candidatePasswords.map(pw => sha256(pw));
+
+  const normalizeHash = (hashValue) =>
+    typeof hashValue === 'string'
+      ? hashValue.trim().toLowerCase().replace(/\s+/g, '')
+      : undefined;
+
+  const VALID_HASH = normalizeHash(process.env.PASSWORD_HASH);
+
+  const legacySecrets = [];
+  [process.env.AUTH_PASSWORD, process.env.ADMIN_PASSWORD, process.env.PASSWORD]
+    .filter(secret => typeof secret === 'string' && secret.length > 0)
+    .forEach(secret => {
+      legacySecrets.push(secret);
+      const trimmed = secret.trim();
+      if (trimmed && trimmed !== secret) {
+        legacySecrets.push(trimmed);
+      }
+    });
+
+  if (!VALID_HASH && legacySecrets.length === 0) {
+    console.error('❌ Не задан ни PASSWORD_HASH, ни один из резервных паролей (AUTH_PASSWORD / ADMIN_PASSWORD / PASSWORD)');
     return res.status(500).json({
       success: false,
       message: 'Ошибка конфигурации сервера'
     });
   }
 
-  if (hash === VALID_HASH) {
+  const hashMatches = VALID_HASH
+    ? candidateHashes.some(hash => hash === VALID_HASH)
+    : false;
+
+  const legacyMatches = legacySecrets.length > 0
+    ? candidatePasswords.some(pw => legacySecrets.includes(pw))
+    : false;
+
+  if (hashMatches || legacyMatches) {
     return res.status(200).json({
       success: true,
       message: 'Доступ разрешён'
