@@ -62,9 +62,36 @@ const pool = new Pool({
   ssl: NODE_ENV === 'production' ? { rejectUnauthorized: true } : false
 });
 
-// Вспомогательная функция SHA-256
+// Вспомогательные функции аутентификации
+const HASH_REGEX = /^[a-f0-9]{64}$/i;
+const HASH_WITH_PREFIX = /^(?:sha-?256:)([a-f0-9]{64})$/i;
+
 function sha256(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
+function extractHashCandidate(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const prefixed = trimmed.match(HASH_WITH_PREFIX);
+  if (prefixed) return prefixed[1].toLowerCase();
+  if (HASH_REGEX.test(trimmed)) return trimmed.toLowerCase();
+  return undefined;
+}
+
+function collectPlaintextSecrets(values) {
+  const secrets = new Set();
+  values
+    .filter(secret => typeof secret === 'string' && secret.length > 0)
+    .forEach(secret => {
+      secrets.add(secret);
+      const trimmed = secret.trim();
+      if (trimmed && trimmed !== secret) {
+        secrets.add(trimmed);
+      }
+    });
+  return secrets;
 }
 
 // === ЭНДПОИНТЫ ===
@@ -110,6 +137,7 @@ app.post('/api/auth', (req, res) => {
 
   const rawPassword = String(password);
   const trimmedPassword = rawPassword.trim();
+  const normalizedPassword = trimmedPassword.normalize('NFKC');
 
   if (!trimmedPassword) {
     return res.status(400).json({
@@ -120,39 +148,22 @@ app.post('/api/auth', (req, res) => {
 
   const candidatePasswords = Array.from(
     new Set(
-      [rawPassword, trimmedPassword].filter(pw => typeof pw === 'string' && pw.length > 0)
+      [rawPassword, trimmedPassword, normalizedPassword]
+        .filter(pw => typeof pw === 'string' && pw.length > 0)
     )
   );
   const candidateHashes = candidatePasswords.map(pw => sha256(pw));
 
-  const normalizeHash = (hashValue) =>
-    typeof hashValue === 'string'
-      ? hashValue.trim().toLowerCase().replace(/\s+/g, '')
-      : undefined;
+  const passwordHashEnv = process.env.PASSWORD_HASH;
+  const validHash = extractHashCandidate(passwordHashEnv);
+  const envProvidesValidHash = typeof validHash === 'string';
 
-  const rawHashEnv = process.env.PASSWORD_HASH;
-  const VALID_HASH = normalizeHash(rawHashEnv);
-  const HASH_REGEX = /^[a-f0-9]{64}$/;
-  const envProvidesValidHash = typeof VALID_HASH === 'string' && HASH_REGEX.test(VALID_HASH);
-
-  const legacySecrets = new Set();
-  [process.env.AUTH_PASSWORD, process.env.ADMIN_PASSWORD, process.env.PASSWORD]
-    .filter(secret => typeof secret === 'string' && secret.length > 0)
-    .forEach(secret => {
-      legacySecrets.add(secret);
-      const trimmed = secret.trim();
-      if (trimmed && trimmed !== secret) {
-        legacySecrets.add(trimmed);
-      }
-    });
-
-  if (!envProvidesValidHash && typeof rawHashEnv === 'string' && rawHashEnv.trim().length > 0) {
-    legacySecrets.add(rawHashEnv);
-    const trimmed = rawHashEnv.trim();
-    if (trimmed && trimmed !== rawHashEnv) {
-      legacySecrets.add(trimmed);
-    }
-  }
+  const legacySecrets = collectPlaintextSecrets([
+    envProvidesValidHash ? undefined : passwordHashEnv,
+    process.env.AUTH_PASSWORD,
+    process.env.ADMIN_PASSWORD,
+    process.env.PASSWORD
+  ]);
 
   if (!envProvidesValidHash && legacySecrets.size === 0) {
     console.error('❌ Не задан ни PASSWORD_HASH, ни один из резервных паролей (AUTH_PASSWORD / ADMIN_PASSWORD / PASSWORD)');
@@ -163,7 +174,7 @@ app.post('/api/auth', (req, res) => {
   }
 
   const hashMatches = envProvidesValidHash
-    ? candidateHashes.some(hash => hash === VALID_HASH)
+    ? candidateHashes.some(hash => hash === validHash)
     : false;
 
   const legacyList = Array.from(legacySecrets);
