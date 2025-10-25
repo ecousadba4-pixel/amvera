@@ -1,4 +1,53 @@
-const API_BASE = '';
+const DEFAULT_BACKEND_HOST = 'usadba4.ru';
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '']);
+
+const normalizeBase = (value) => {
+  if (!value || typeof value !== 'string') {
+    return '';
+  }
+  return value.trim().replace(/\/$/, '');
+};
+
+const resolveApiBase = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const globalBase = normalizeBase(
+    window.__LOYALTY_API_BASE__ ||
+      window.__AMVERA_API_BASE__ ||
+      window.__APP_API_BASE__
+  );
+  if (globalBase) {
+    return globalBase;
+  }
+
+  const docEl = document.documentElement;
+  const attrBase = normalizeBase(
+    docEl?.dataset?.apiBase || docEl?.getAttribute('data-api-base')
+  );
+  if (attrBase) {
+    return attrBase;
+  }
+
+  const { protocol, hostname } = window.location;
+
+  if (!hostname || protocol === 'file:') {
+    return `https://${DEFAULT_BACKEND_HOST}`;
+  }
+
+  if (LOCAL_HOSTNAMES.has(hostname) || hostname.endsWith('.local')) {
+    return '';
+  }
+
+  if (hostname === DEFAULT_BACKEND_HOST) {
+    return '';
+  }
+
+  return `https://${DEFAULT_BACKEND_HOST}`;
+};
+
+const API_BASE = resolveApiBase();
 const API = {
   AUTH: `${API_BASE}/api/auth`,
   SEARCH: `${API_BASE}/api/bonuses/search`,
