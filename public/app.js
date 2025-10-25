@@ -50,6 +50,7 @@ const resolveApiBase = () => {
 const API_BASE = resolveApiBase();
 const API = {
   AUTH: `${API_BASE}/api/auth`,
+  CONFIG: `${API_BASE}/api/config`,
   SEARCH: `${API_BASE}/api/bonuses/search`,
   ADD: `${API_BASE}/api/guests`
 };
@@ -195,6 +196,38 @@ function initFlexbeApp() {
   const nextGuestBtn = D('nextGuestBtn');
   const dateField = D('checkin_date');
   const loyaltyField = D('loyalty_level');
+  const authDisabledBanner = D('auth-disabled-banner');
+  let authDisabled = false;
+  let phoneMaskApplied = false;
+
+  const ensurePhoneMask = () => {
+    if (phone && !phoneMaskApplied) {
+      applyPhoneMask(phone);
+      phoneMaskApplied = true;
+    }
+  };
+
+  const showMainForm = () => {
+    passwordBlock?.classList.add('hidden');
+    formBlock?.classList.remove('hidden');
+
+    if (authDisabled) {
+      authDisabledBanner?.classList.remove('hidden');
+    } else {
+      authDisabledBanner?.classList.add('hidden');
+    }
+
+    if (phone) {
+      ensurePhoneMask();
+      phone.value = '';
+      phone.focus();
+    }
+
+    if (dateField) {
+      dateField.value = getDateMinusTwoDaysYMD();
+      dateField.dispatchEvent(new Event('input'));
+    }
+  };
 
   if (!pass || !enterBtn || !phone || !dateField || !loyaltyField || !msg) {
     setTimeout(initFlexbeApp, 300);
@@ -203,11 +236,34 @@ function initFlexbeApp() {
 
   pass.type = 'password';
 
+  async function loadConfig() {
+    try {
+      const response = await fetch(API.CONFIG);
+      if (response.ok) {
+        const data = await response.json();
+        authDisabled = Boolean(data?.authDisabled);
+        if (authDisabled) {
+          showMainForm();
+        } else {
+          authDisabledBanner?.classList.add('hidden');
+        }
+      }
+    } catch (error) {
+      console.error('Config load error:', error);
+    }
+  }
+
+  loadConfig();
+
   async function checkPassword() {
     wrong?.classList.add('hidden');
     const password = pass.value.trim();
 
     if (!password) {
+      if (authDisabled) {
+        showMainForm();
+        return;
+      }
       wrong?.classList.remove('hidden');
       return;
     }
@@ -222,15 +278,7 @@ function initFlexbeApp() {
       const result = await resp.json();
 
       if (resp.ok && result.success) {
-        passwordBlock?.classList.add('hidden');
-        formBlock?.classList.remove('hidden');
-
-        phone.value = '';
-        applyPhoneMask(phone);
-        phone.focus();
-
-        dateField.value = getDateMinusTwoDaysYMD();
-        dateField.dispatchEvent(new Event('input'));
+        showMainForm();
       } else {
         wrong?.classList.remove('hidden');
       }

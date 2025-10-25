@@ -145,7 +145,7 @@ h2 {
 }
 
 /* === ИНФОРМАЦИОННЫЕ БЛОКИ === */
-.info-block, .new-guest-block, .phone-error-block, .searching-block {
+.info-block, .new-guest-block, .phone-error-block, .searching-block, .info-banner {
   border-radius: 10px;
   padding: 0.9rem 1rem;
   margin: 0.9rem 0;
@@ -155,6 +155,12 @@ h2 {
 .info-block {
   background:#f3f9f0;
   border-left:5px solid var(--brand-color);
+}
+
+.info-banner {
+  background:#f0f4e8;
+  border-left:5px solid var(--brand-color);
+  color:#3d4a1f;
 }
 
 .new-guest-block {
