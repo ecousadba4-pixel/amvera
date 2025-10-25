@@ -1,0 +1,235 @@
+/* === ШРИФТЫ === */
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&family=Prata&display=swap');
+
+/* === ПАЛИТРА === */
+:root {
+  --brand-color: #8a9d4c;
+  --brand-dark: #6b7c3a;
+  --gray-light: #f5f6f4;
+  --gray-dark: #2f2f2f;
+}
+
+/* === ОБЩИЕ СТИЛИ === */
+body {
+  font-family: 'Open Sans', sans-serif;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(135deg, var(--brand-color), var(--brand-dark));
+  color: var(--gray-dark);
+  min-height: 100vh;
+}
+
+/* === ЦЕНТР И КОНТЕЙНЕР === */
+.centered {
+  display: flex;
+  align-items: center;        /* вертикальное центрирование */
+  justify-content: center;    /* горизонтальное центрирование */
+  min-height: 100vh;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+/* === КАРТОЧКИ === */
+.card, .form-container {
+  background: #fff;
+  padding: 2rem;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  width: 100%;
+  max-width: 520px;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.password-card { max-width: 420px; }
+
+.card:hover, .form-container:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 40px rgba(138, 157, 76, 0.22);
+}
+
+/* === ЗАГОЛОВКИ === */
+h2 {
+  font-family: 'Prata', serif;
+  font-size: 1.75rem;
+  margin: 0 0 1.2rem 0;
+  text-align: center;
+  color: var(--gray-dark);
+}
+
+/* === ФОРМЫ === */
+.form-group {
+  margin-bottom: 1.1rem;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+  color: var(--gray-dark);
+}
+
+.form-input, .form-select {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border-radius: 10px;
+  border: 2px solid #e6e8df;
+  font-size: 1rem;
+  box-sizing: border-box;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+  background: #fff;
+  font-family: 'Open Sans', sans-serif;
+}
+
+.form-input:focus, .form-select:focus {
+  outline: none;
+  border-color: var(--brand-color);
+  box-shadow: 0 0 0 6px rgba(138,157,76,0.08);
+}
+
+.help-text {
+  color: #6f6f6f;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+/* === КНОПКИ === */
+.form-button {
+  width: 100%;
+  padding: 0.95rem;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand-color), var(--brand-dark));
+  color: #fff;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  letter-spacing: 0.6px;
+  margin-top: 0.6rem;
+}
+
+.form-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px rgba(138,157,76,0.22);
+}
+
+.form-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.secondary-button {
+  background: linear-gradient(135deg, #6c757d, #5a6268);
+}
+
+/* === СООБЩЕНИЯ === */
+.error, .success {
+  padding: 1rem;
+  border-radius: 10px;
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.error {
+  background:#ffeaea;
+  color:#c62828;
+  border:1px solid #f5c6cb;
+}
+
+.success {
+  background:#e8f5e9;
+  color:#2e7d32;
+  border:1px solid #c3e6cb;
+}
+
+/* === ИНФОРМАЦИОННЫЕ БЛОКИ === */
+.info-block, .new-guest-block, .phone-error-block, .searching-block {
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  margin: 0.9rem 0;
+  font-size: 0.95rem;
+}
+
+.info-block {
+  background:#f3f9f0;
+  border-left:5px solid var(--brand-color);
+}
+
+.new-guest-block {
+  background:#fff8e1;
+  border-left:5px solid #ffd54f;
+  color:#7a5b1c;
+}
+
+.phone-error-block {
+  background:#ffebee;
+  border-left:5px solid #f44336;
+  color:#c62828;
+}
+
+.searching-block {
+  background:#e3f2fd;
+  border-left:5px solid #2196f3;
+  color:#1565c0;
+}
+
+/* === ПРОЧЕЕ === */
+.hidden { display: none; }
+
+.spacer {
+  height: 16px;
+}
+
+/* readonly-поля */
+.readonly-field {
+  background: #f6f6f6;
+  color: #555;
+  cursor: not-allowed;
+}
+
+/* === АДАПТАЦИЯ ДЛЯ МОБИЛЬНЫХ === */
+@media (max-width: 640px) {
+  .card, .form-container {
+    padding: 1.25rem;
+    border-radius: 14px;
+    max-width: 100%;
+  }
+  .centered {
+    align-items: flex-start;
+    padding-top: 18px;
+    min-height: auto;
+  }
+  h2 {
+    font-size: 1.4rem;
+  }
+}
+
+/* === ДОПОЛНИТЕЛЬНЫЕ СТИЛИ ДЛЯ UI === */
+.fade {
+  opacity: 0;
+  animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#message {
+  margin-top: 1rem;
+  font-weight: 600;
+}

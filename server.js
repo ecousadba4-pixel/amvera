@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const crypto = require('crypto'); // Для SHA-256
+const path = require('path');
 
 const app = express();
 
@@ -19,6 +20,7 @@ const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const STATIC_DIR = path.join(__dirname, 'public');
 
 // Trust proxy для Amvera/cloud
 app.set('trust proxy', 1);
@@ -27,6 +29,12 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cookieParser(COOKIE_SECRET));
 app.use(express.json({ limit: '1mb' }));
+
+// Статические ассеты для внутреннего фронтенда
+app.use('/app', express.static(STATIC_DIR));
+app.get('/app', (req, res) => {
+  res.sendFile(path.join(STATIC_DIR, 'index.html'));
+});
 
 // Rate limiting
 app.use(rateLimit({
