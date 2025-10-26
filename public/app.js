@@ -55,8 +55,10 @@ const API = {
 };
 
 const D = (id) => document.getElementById(id);
+const PHONE_REQUIRED_DIGITS = 11;
 const normalizePhone = (n) => (n || '').replace(/\D/g, '').slice(-10);
 const isValidPhone = (n) => /^\+?7?\d{10}$/.test((n || '').replace(/\D/g, ''));
+const extractDigits = (value) => (value || '').replace(/\D/g, '');
 
 function formatInteger(n) {
   const value = typeof n === 'number' ? n : parseFloat(n || '0');
@@ -212,7 +214,8 @@ function initFlexbeApp() {
 
   const setLoading = (isLoading) => {
     if (!submitBtn) return;
-    submitBtn.disabled = isLoading;
+    submitBtn.dataset.loading = isLoading ? 'true' : 'false';
+    submitBtn.disabled = isLoading || submitBtn.dataset.phoneLocked === 'true';
     submitBtn.classList.toggle('is-loading', isLoading);
   };
 
@@ -222,6 +225,35 @@ function initFlexbeApp() {
       phoneMaskApplied = true;
     }
   };
+
+  if (!pass || !enterBtn || !phone || !dateField || !loyaltyField || !msg || !form || !submitBtn) {
+    setTimeout(initFlexbeApp, 300);
+    return;
+  }
+
+  const guestInfo = D('guest-info');
+  const newGuest = D('new-guest-info');
+  const phoneError = D('phone-error');
+  const phoneIncomplete = D('phone-incomplete');
+  const searching = D('searching-guest');
+  const dependentElements = Array.from(form.querySelectorAll('[data-requires-phone]'));
+  const setDependentFieldsEnabled = (enabled) => {
+    dependentElements.forEach((el) => {
+      if (!enabled) {
+        el.dataset.phoneLocked = 'true';
+        el.disabled = true;
+        return;
+      }
+
+      delete el.dataset.phoneLocked;
+      if (el === submitBtn) {
+        el.disabled = el.dataset.loading === 'true';
+      } else {
+        el.disabled = false;
+      }
+    });
+  };
+  let lastSearchRequestId = 0;
 
   const showMainForm = () => {
     passwordBlock?.classList.add('hidden');
@@ -237,12 +269,17 @@ function initFlexbeApp() {
       dateField.value = getDateMinusTwoDaysYMD();
       dateField.dispatchEvent(new Event('input'));
     }
+
+    setDependentFieldsEnabled(false);
+    phoneIncomplete?.classList.add('hidden');
+    guestInfo?.classList.add('hidden');
+    newGuest?.classList.add('hidden');
+    searching?.classList.add('hidden');
+    phoneError?.classList.add('hidden');
+    hideMessage();
   };
 
-  if (!pass || !enterBtn || !phone || !dateField || !loyaltyField || !msg || !form || !submitBtn) {
-    setTimeout(initFlexbeApp, 300);
-    return;
-  }
+  setDependentFieldsEnabled(false);
 
   pass.type = 'password';
 
@@ -282,30 +319,45 @@ function initFlexbeApp() {
 
   const debounce = (fn, ms = 600) => {
     let timeoutId;
-    return (...args) => {
+    const debounced = (...args) => {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      timeoutId = window.setTimeout(() => fn(...args), ms);
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null;
+        fn(...args);
+      }, ms);
     };
+    debounced.cancel = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+    return debounced;
   };
 
   const updateGuestInfo = debounce(async (val) => {
-    const searching = D('searching-guest');
-    const guestInfo = D('guest-info');
-    const newGuest = D('new-guest-info');
-    const phoneError = D('phone-error');
-
     guestInfo?.classList.add('hidden');
     newGuest?.classList.add('hidden');
     phoneError?.classList.add('hidden');
 
-    if (!isValidPhone(val)) return;
+    if (!isValidPhone(val)) {
+      searching?.classList.add('hidden');
+      return;
+    }
 
+    const requestId = ++lastSearchRequestId;
     searching?.classList.remove('hidden');
+
     try {
       const resp = await fetch(`${API.SEARCH}?phone=${normalizePhone(val)}`);
       const data = await resp.json();
+
+      if (requestId !== lastSearchRequestId) {
+        return;
+      }
+
       searching?.classList.add('hidden');
 
       const guest = data?.data;
@@ -345,6 +397,9 @@ function initFlexbeApp() {
         loyaltyField.classList.add('readonly-field');
       }
     } catch (error) {
+      if (requestId !== lastSearchRequestId) {
+        return;
+      }
       console.error('Search error:', error);
       searching?.classList.add('hidden');
       phoneError?.classList.remove('hidden');
@@ -353,10 +408,28 @@ function initFlexbeApp() {
 
   phone.addEventListener('input', (event) => {
     const val = event.target.value;
-    if (val.replace(/\D/g, '').length < 11) {
-      unlockAndClear();
-    }
+    const digits = extractDigits(val);
+    const digitsCount = digits.length;
+    const hasAnyDigits = digitsCount > 0;
+    const isCompletePhone = isValidPhone(val) && digitsCount === PHONE_REQUIRED_DIGITS;
+
     hideMessage();
+
+    if (!isCompletePhone) {
+      lastSearchRequestId++;
+      updateGuestInfo.cancel();
+      setDependentFieldsEnabled(false);
+      unlockAndClear();
+      guestInfo?.classList.add('hidden');
+      newGuest?.classList.add('hidden');
+      searching?.classList.add('hidden');
+      phoneError?.classList.add('hidden');
+      phoneIncomplete?.classList.toggle('hidden', !hasAnyDigits);
+      return;
+    }
+
+    phoneIncomplete?.classList.add('hidden');
+    setDependentFieldsEnabled(true);
     updateGuestInfo(val);
   });
 
@@ -438,8 +511,8 @@ function initFlexbeApp() {
         el.value = '';
       }
     });
-    D('guest-info')?.classList.add('hidden');
-    D('new-guest-info')?.classList.add('hidden');
+    guestInfo?.classList.add('hidden');
+    newGuest?.classList.add('hidden');
     nextGuestBtn?.classList.add('hidden');
     phone.value = '';
     dateField.value = getDateMinusTwoDaysYMD();
@@ -447,6 +520,10 @@ function initFlexbeApp() {
     loyaltyField.setAttribute('readonly', 'readonly');
     loyaltyField.classList.add('readonly-field');
     unlockAndClear();
+    setDependentFieldsEnabled(false);
+    searching?.classList.add('hidden');
+    phoneError?.classList.add('hidden');
+    phoneIncomplete?.classList.add('hidden');
     hideMessage();
     phone.focus();
   };

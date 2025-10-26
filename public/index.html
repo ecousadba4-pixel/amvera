@@ -35,13 +35,34 @@
                   placeholder="+7 (XXX) XXX-XX-XX"
                   inputmode="tel"
                   autocomplete="tel"
-                  aria-describedby="help-phone phone-error"
+                  aria-describedby="help-phone phone-error phone-incomplete"
                 />
                 <div id="help-phone" class="help-text">Формат: +7 и далее 10 цифр</div>
               </div>
               <div class="form-status">
-                <div id="searching-guest" class="searching-block hidden" role="status" aria-live="polite">🔍 Поиск гостя...</div>
-                <div id="phone-error" class="phone-error-block hidden" role="alert">⚠️ Неверный формат номера</div>
+                <div
+                  id="searching-guest"
+                  class="searching-block hidden"
+                  role="status"
+                  aria-live="polite"
+                >
+                  🔍 Поиск гостя...
+                </div>
+                <div
+                  id="phone-error"
+                  class="phone-error-block hidden"
+                  role="alert"
+                >
+                  ⚠️ Неверный формат номера
+                </div>
+                <div
+                  id="phone-incomplete"
+                  class="phone-incomplete-block hidden"
+                  role="status"
+                  aria-live="polite"
+                >
+                  ⚠️ Номер введен не полностью
+                </div>
               </div>
             </div>
             <div id="guest-info" class="info-summary hidden" aria-live="polite">
@@ -66,11 +87,11 @@
             <div class="form-grid two-column">
               <div class="form-group">
                 <label for="last_name">Фамилия:</label>
-                <input id="last_name" class="form-input" autocomplete="family-name" />
+                <input id="last_name" class="form-input" autocomplete="family-name" data-requires-phone="true" />
               </div>
               <div class="form-group">
                 <label for="first_name">Имя:</label>
-                <input id="first_name" class="form-input" autocomplete="given-name" />
+                <input id="first_name" class="form-input" autocomplete="given-name" data-requires-phone="true" />
               </div>
             </div>
           </section>
@@ -80,29 +101,29 @@
             <div class="form-grid two-column">
               <div class="form-group">
                 <label for="checkin_date">Дата заезда:</label>
-                <input type="date" id="checkin_date" class="form-input" />
+                <input type="date" id="checkin_date" class="form-input" data-requires-phone="true" />
               </div>
               <div class="form-group">
                 <label for="loyalty_level">Уровень лояльности:</label>
-                <input id="loyalty_level" class="form-input" readonly />
+                <input id="loyalty_level" class="form-input" readonly data-requires-phone="true" />
               </div>
               <div class="form-group">
                 <label for="shelter_booking_id">Номер бронирования Shelter:</label>
-                <input id="shelter_booking_id" class="form-input" autocomplete="off" />
+                <input id="shelter_booking_id" class="form-input" autocomplete="off" data-requires-phone="true" />
               </div>
               <div class="form-group">
                 <label for="total_amount">Сумма при выезде (до вычета баллов):</label>
-                <input id="total_amount" class="form-input" type="number" min="0" step="0.01" />
+                <input id="total_amount" class="form-input" type="number" min="0" step="0.01" data-requires-phone="true" />
               </div>
               <div class="form-group">
                 <label for="bonus_spent">Сумма списанных ранее накопленных баллов:</label>
-                <input id="bonus_spent" class="form-input" type="number" min="0" step="1" />
+                <input id="bonus_spent" class="form-input" type="number" min="0" step="1" data-requires-phone="true" />
               </div>
             </div>
           </section>
 
           <div class="form-actions">
-            <button id="submitBtn" class="form-button" type="submit">
+            <button id="submitBtn" class="form-button" type="submit" data-requires-phone="true">
               <span class="button-label">Добавить</span>
               <span class="button-spinner" aria-hidden="true"></span>
             </button>
