@@ -10,10 +10,11 @@ const path = require('path');
 const app = express();
 
 // Переменные окружения
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const DATABASE_URL = process.env.DATABASE_URL;
 const DEFAULT_BACKEND_HOST = 'u4s-loyalty-karinausadba.amvera.io';
+const AUTH_DISABLED = String(process.env.AUTH_DISABLED || '').toLowerCase() === 'true';
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const createWildcardRegex = (pattern) =>
@@ -69,13 +70,49 @@ const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const STATIC_DIR = path.join(__dirname, 'public');
 
+const normalizeHash = (hashValue) => {
+  if (typeof hashValue !== 'string') {
+    return undefined;
+  }
+
+  let normalized = hashValue.trim().toLowerCase().replace(/\s+/g, '');
+
+  normalized = normalized.replace(/^(sha-?256[:=]?)/, '');
+  normalized = normalized.replace(/^0x/, '');
+
+  if (!/^[a-f0-9]{64}$/i.test(normalized)) {
+    return undefined;
+  }
+
+  return normalized;
+};
+
+const PASSWORD_HASH = normalizeHash(process.env.PASSWORD_HASH);
+
+if (!DATABASE_URL) {
+  console.error('❌ Переменная окружения DATABASE_URL не задана. Сервер остановлен.');
+  process.exit(1);
+}
+
+if (!AUTH_DISABLED && !PASSWORD_HASH) {
+  console.error(
+    '❌ Не задан PASSWORD_HASH и отключение авторизации не разрешено. Установите PASSWORD_HASH или AUTH_DISABLED=true.'
+  );
+  process.exit(1);
+}
+
 // Trust proxy для Amvera/cloud
 app.set('trust proxy', 1);
 
 // Middleware
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+  })
+);
 app.use(cookieParser(COOKIE_SECRET));
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 // Статические ассеты для внутреннего фронтенда
 app.use('/app', express.static(STATIC_DIR));
@@ -84,10 +121,17 @@ app.get('/app', (req, res) => {
 });
 
 // Rate limiting
-app.use(rateLimit({
+const apiRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW,
-  max: RATE_LIMIT_MAX
-}));
+  max: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Слишком много запросов, попробуйте позже.'
+  }
+});
+app.use(apiRateLimiter);
 
 // CORS
 app.use(cors({
@@ -104,14 +148,59 @@ app.use(cors({
 }));
 
 // Подключение к БД
+const PG_POOL_MAX = Number(process.env.PG_POOL_MAX) || 10;
+const PG_IDLE_TIMEOUT = Number(process.env.PG_IDLE_TIMEOUT) || 30_000;
+const PG_CONNECTION_TIMEOUT = Number(process.env.PG_CONNECTION_TIMEOUT) || 5_000;
+const PG_SSL_REJECT_UNAUTHORIZED = String(process.env.PG_SSL_REJECT_UNAUTHORIZED || '').toLowerCase() !== 'false';
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: NODE_ENV === 'production' ? { rejectUnauthorized: true } : false
+  max: PG_POOL_MAX,
+  idleTimeoutMillis: PG_IDLE_TIMEOUT,
+  connectionTimeoutMillis: PG_CONNECTION_TIMEOUT,
+  ssl: NODE_ENV === 'production' ? { rejectUnauthorized: PG_SSL_REJECT_UNAUTHORIZED } : false
+});
+
+pool.on('error', (error) => {
+  console.error('❌ Необработанная ошибка пула БД:', error.message);
 });
 
 // Вспомогательная функция SHA-256
 function sha256(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
+function normalizeCheckinDate(dateValue) {
+  if (!dateValue) {
+    return null;
+  }
+
+  const raw = String(dateValue).trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(raw)) {
+    const [day, month, year] = raw.split('.');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  if (/^\d{2}-\d{2}-\d{4}$/.test(raw)) {
+    const [day, month, year] = raw.split('-');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  if (/^\d{4}\.\d{2}\.\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('.');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  return null;
 }
 
 // === ЭНДПОИНТЫ ===
@@ -136,7 +225,7 @@ app.get('/health', async (req, res) => {
 
 app.get('/api/config', (req, res) => {
   res.json({
-    authDisabled: false
+    authDisabled: AUTH_DISABLED
   });
 });
 
@@ -153,6 +242,13 @@ app.get('/', (req, res) => {
 // 🔐 Аутентификация (новый эндпоинт)
 app.post('/api/auth', (req, res) => {
   const { password } = req.body;
+
+  if (AUTH_DISABLED) {
+    return res.status(200).json({
+      success: true,
+      message: 'Авторизация отключена администратором'
+    });
+  }
 
   if (!password || typeof password !== 'string') {
     return res.status(400).json({
@@ -178,22 +274,7 @@ app.post('/api/auth', (req, res) => {
   );
   const candidateHashes = candidatePasswords.map(pw => sha256(pw));
 
-  const normalizeHash = (hashValue) => {
-    if (typeof hashValue !== 'string') {
-      return undefined;
-    }
-
-    let normalized = hashValue.trim().toLowerCase().replace(/\s+/g, '');
-
-    normalized = normalized.replace(/^(sha-?256[:=]?)/, '');
-    normalized = normalized.replace(/^0x/, '');
-
-    return normalized;
-  };
-
-  const VALID_HASH = normalizeHash(process.env.PASSWORD_HASH);
-
-  if (!VALID_HASH) {
+  if (!PASSWORD_HASH) {
     console.error('❌ Не задан PASSWORD_HASH для проверки пароля');
     return res.status(500).json({
       success: false,
@@ -201,7 +282,9 @@ app.post('/api/auth', (req, res) => {
     });
   }
 
-  const hashMatches = candidateHashes.some(hash => hash === VALID_HASH);
+  const hashMatches = candidateHashes
+    .map((hash) => normalizeHash(hash))
+    .some((hash) => hash === PASSWORD_HASH);
 
   if (hashMatches) {
     return res.status(200).json({
@@ -230,20 +313,85 @@ app.post('/api/guests', async (req, res) => {
       bonus_spent
     } = req.body;
 
-    if (!guest_phone || !last_name || !first_name) {
+    if (!guest_phone || !last_name || !first_name || !shelter_booking_id || !total_amount) {
       return res.status(400).json({
         success: false,
-        message: 'Обязательные поля: номер телефона, фамилия и имя'
+        message: 'Заполните обязательные поля: телефон, фамилия, имя, номер бронирования и сумму.'
       });
     }
 
-    let parsedDate = checkin_date;
-    if (checkin_date && checkin_date.includes('.')) {
-      const parts = checkin_date.split('.');
-      if (parts.length === 3) {
-        const [day, month, year] = parts;
-        parsedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-      }
+    const normalizedPhoneDigits = String(guest_phone).replace(/\D/g, '');
+    if (normalizedPhoneDigits.length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Укажите корректный номер телефона гостя.'
+      });
+    }
+    const phoneToStore = normalizedPhoneDigits.slice(-10);
+
+    const lastNameSanitized = String(last_name).trim();
+    const firstNameSanitized = String(first_name).trim();
+    const bookingSanitized = String(shelter_booking_id).trim();
+    const loyaltySanitized = String(loyalty_level || '').trim();
+    const normalizedDate = normalizeCheckinDate(checkin_date);
+
+    if (!lastNameSanitized || !firstNameSanitized) {
+      return res.status(400).json({
+        success: false,
+        message: 'Фамилия и имя не могут быть пустыми.'
+      });
+    }
+
+    if (lastNameSanitized.length > 120 || firstNameSanitized.length > 120) {
+      return res.status(400).json({
+        success: false,
+        message: 'Фамилия и имя не должны превышать 120 символов.'
+      });
+    }
+
+    if (!bookingSanitized) {
+      return res.status(400).json({
+        success: false,
+        message: 'Укажите номер бронирования Shelter.'
+      });
+    }
+
+    if (bookingSanitized.length > 80) {
+      return res.status(400).json({
+        success: false,
+        message: 'Номер бронирования слишком длинный.'
+      });
+    }
+
+    if (!normalizedDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Некорректный формат даты заезда.'
+      });
+    }
+
+    if (Number.isNaN(Date.parse(normalizedDate))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Дата заезда не распознана.'
+      });
+    }
+
+    const amount = Number.parseFloat(total_amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Сумма при выезде должна быть положительным числом не более 1 000 000.'
+      });
+    }
+
+    const bonusValueRaw = Number.parseInt(bonus_spent, 10);
+    const bonusValue = Number.isFinite(bonusValueRaw) && bonusValueRaw > 0 ? bonusValueRaw : 0;
+    if (bonusValue > 1_000_000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Списанные баллы не могут превышать 1 000 000.'
+      });
     }
 
     const query = `
@@ -255,14 +403,14 @@ app.post('/api/guests', async (req, res) => {
     `;
 
     const values = [
-      guest_phone.replace(/\D/g, '').slice(-10),
-      last_name,
-      first_name,
-      parsedDate,
-      loyalty_level,
-      shelter_booking_id,
-      parseFloat(total_amount) || 0,
-      parseInt(bonus_spent) || 0
+      phoneToStore,
+      lastNameSanitized,
+      firstNameSanitized,
+      normalizedDate,
+      loyaltySanitized || null,
+      bookingSanitized,
+      amount,
+      bonusValue
     ];
 
     const result = await pool.query(query, values);
@@ -291,7 +439,15 @@ app.get('/api/bonuses/search', async (req, res) => {
         message: 'Не указан номер телефона для поиска'
       });
     }
-    const normalizedPhone = phone.replace(/\D/g, '').slice(-10);
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Неверный формат номера телефона'
+      });
+    }
+
+    const normalizedPhone = digits.slice(-10);
 
     const result = await pool.query(
       `SELECT

@@ -51,7 +51,41 @@ const API_BASE = resolveApiBase();
 const API = {
   AUTH: `${API_BASE}/api/auth`,
   SEARCH: `${API_BASE}/api/bonuses/search`,
-  ADD: `${API_BASE}/api/guests`
+  ADD: `${API_BASE}/api/guests`,
+  CONFIG: `${API_BASE}/api/config`
+};
+
+const configState = {
+  loaded: false,
+  authDisabled: false
+};
+
+const loadServerConfig = async () => {
+  if (configState.loaded) {
+    return configState;
+  }
+
+  try {
+    const response = await fetch(API.CONFIG, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Config request failed with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    configState.authDisabled = Boolean(data?.authDisabled);
+  } catch (error) {
+    console.warn('Не удалось получить конфигурацию сервера:', error);
+    configState.authDisabled = false;
+  } finally {
+    configState.loaded = true;
+  }
+
+  return configState;
 };
 
 const D = (id) => document.getElementById(id);
@@ -185,7 +219,7 @@ function unlockAndClear() {
   });
 }
 
-function initFlexbeApp() {
+async function initFlexbeApp() {
   const pass = D('pass');
   const enterBtn = D('enterBtn');
   const wrong = D('wrong-pass');
@@ -236,7 +270,34 @@ function initFlexbeApp() {
   const phoneError = D('phone-error');
   const phoneIncomplete = D('phone-incomplete');
   const searching = D('searching-guest');
+  const authBanner = D('auth-disabled-banner');
   const dependentElements = Array.from(form.querySelectorAll('[data-requires-phone]'));
+
+  const defaultWrongText = (wrong?.textContent || 'Неверный пароль!').trim();
+  const phoneErrorDefaultText = (phoneError?.textContent || '⚠️ Неверный формат номера').trim();
+
+  const showPasswordError = (text) => {
+    if (!wrong) return;
+    if (!text) {
+      wrong.textContent = defaultWrongText;
+      wrong.classList.add('hidden');
+      return;
+    }
+    wrong.textContent = text;
+    wrong.classList.remove('hidden');
+  };
+
+  const showPhoneError = (text) => {
+    if (!phoneError) return;
+    if (!text) {
+      phoneError.textContent = phoneErrorDefaultText;
+      phoneError.classList.add('hidden');
+      return;
+    }
+    phoneError.textContent = text;
+    phoneError.classList.remove('hidden');
+  };
+
   const setDependentFieldsEnabled = (enabled) => {
     dependentElements.forEach((el) => {
       if (!enabled) {
@@ -253,11 +314,18 @@ function initFlexbeApp() {
       }
     });
   };
+
   let lastSearchRequestId = 0;
 
   const showMainForm = () => {
     passwordBlock?.classList.add('hidden');
     formBlock?.classList.remove('hidden');
+    showPasswordError();
+    nextGuestBtn?.classList.add('hidden');
+
+    if (pass) {
+      pass.value = '';
+    }
 
     if (phone) {
       ensurePhoneMask();
@@ -270,12 +338,17 @@ function initFlexbeApp() {
       dateField.dispatchEvent(new Event('input'));
     }
 
+    unlockAndClear();
+    loyaltyField.value = '';
+    loyaltyField.removeAttribute('readonly');
+    loyaltyField.classList.remove('readonly-field');
+
     setDependentFieldsEnabled(false);
     phoneIncomplete?.classList.add('hidden');
     guestInfo?.classList.add('hidden');
     newGuest?.classList.add('hidden');
     searching?.classList.add('hidden');
-    phoneError?.classList.add('hidden');
+    showPhoneError();
     hideMessage();
   };
 
@@ -283,12 +356,32 @@ function initFlexbeApp() {
 
   pass.type = 'password';
 
+  const applyAuthState = (isDisabled) => {
+    if (isDisabled) {
+      authBanner?.classList.remove('hidden');
+      showMainForm();
+    } else {
+      authBanner?.classList.add('hidden');
+      passwordBlock?.classList.remove('hidden');
+      formBlock?.classList.add('hidden');
+      showPasswordError();
+      pass?.focus();
+    }
+  };
+
+  const config = await loadServerConfig();
+  applyAuthState(config.authDisabled);
+
   async function checkPassword() {
-    wrong?.classList.add('hidden');
+    if (configState.authDisabled) {
+      showMainForm();
+      return;
+    }
+
     const password = pass.value.trim();
 
     if (!password) {
-      wrong?.classList.remove('hidden');
+      showPasswordError('Пароль обязателен');
       return;
     }
 
@@ -299,22 +392,28 @@ function initFlexbeApp() {
         body: JSON.stringify({ password })
       });
 
-      const result = await resp.json();
+      const result = await resp.json().catch(() => ({}));
 
-      if (resp.ok && result.success) {
+      if (resp.ok && result?.success) {
         showMainForm();
       } else {
-        wrong?.classList.remove('hidden');
+        const message = result?.message || 'Неверный пароль';
+        showPasswordError(message);
       }
-    } catch (err) {
-      console.error('Auth error:', err);
-      wrong?.classList.remove('hidden');
+    } catch (error) {
+      console.error('Auth error:', error);
+      showPasswordError('Не удалось проверить пароль. Проверьте соединение.');
     }
   }
 
-  enterBtn.onclick = checkPassword;
+  enterBtn.onclick = () => {
+    void checkPassword();
+  };
   pass.onkeydown = (event) => {
-    if (event.key === 'Enter') checkPassword();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void checkPassword();
+    }
   };
 
   const debounce = (fn, ms = 600) => {
@@ -340,7 +439,7 @@ function initFlexbeApp() {
   const updateGuestInfo = debounce(async (val) => {
     guestInfo?.classList.add('hidden');
     newGuest?.classList.add('hidden');
-    phoneError?.classList.add('hidden');
+    showPhoneError();
 
     if (!isValidPhone(val)) {
       searching?.classList.add('hidden');
@@ -352,13 +451,17 @@ function initFlexbeApp() {
 
     try {
       const resp = await fetch(`${API.SEARCH}?phone=${normalizePhone(val)}`);
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
 
       if (requestId !== lastSearchRequestId) {
         return;
       }
 
       searching?.classList.add('hidden');
+
+      if (!resp.ok || data?.success === false) {
+        throw new Error(data?.message || 'Ошибка поиска гостя');
+      }
 
       const guest = data?.data;
       if (guest) {
@@ -402,7 +505,8 @@ function initFlexbeApp() {
       }
       console.error('Search error:', error);
       searching?.classList.add('hidden');
-      phoneError?.classList.remove('hidden');
+      showPhoneError('⚠️ Не удалось получить данные гостя. Попробуйте позже.');
+      showMessage('error', 'Не удалось получить данные гостя. Попробуйте позже.');
     }
   });
 
@@ -414,17 +518,21 @@ function initFlexbeApp() {
     const isCompletePhone = isValidPhone(val) && digitsCount === PHONE_REQUIRED_DIGITS;
 
     hideMessage();
+    showPhoneError();
 
     if (!isCompletePhone) {
       lastSearchRequestId++;
       updateGuestInfo.cancel();
       setDependentFieldsEnabled(false);
       unlockAndClear();
+      loyaltyField.value = '';
+      loyaltyField.removeAttribute('readonly');
+      loyaltyField.classList.remove('readonly-field');
       guestInfo?.classList.add('hidden');
       newGuest?.classList.add('hidden');
       searching?.classList.add('hidden');
-      phoneError?.classList.add('hidden');
       phoneIncomplete?.classList.toggle('hidden', !hasAnyDigits);
+      nextGuestBtn?.classList.add('hidden');
       return;
     }
 
@@ -438,13 +546,13 @@ function initFlexbeApp() {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     hideMessage();
+    showPhoneError();
     const phoneVal = phone.value;
     const lastNameEl = D('last_name');
     const firstNameEl = D('first_name');
     const amountEl = D('total_amount');
     const bookingEl = D('shelter_booking_id');
     const bonusEl = D('bonus_spent');
-    const phoneError = D('phone-error');
 
     const lastNameVal = lastNameEl?.value.trim();
     const firstNameVal = firstNameEl?.value.trim();
@@ -452,11 +560,10 @@ function initFlexbeApp() {
     const bookingVal = bookingEl?.value.trim();
 
     if (!isValidPhone(phoneVal)) {
-      phoneError?.classList.remove('hidden');
+      showPhoneError(phoneErrorDefaultText);
       phone.focus();
       return;
     }
-    phoneError?.classList.add('hidden');
     if (!lastNameVal || !firstNameVal) {
       showMessage('error', 'Фамилия и имя не могут быть пустыми');
       return;
@@ -492,17 +599,24 @@ function initFlexbeApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      const result = await res.json();
-      const type = result.success ? 'success' : 'error';
-      showMessage(type, result.message || (result.success ? 'Успешно' : 'Ошибка'));
-      if (result.success) {
+      const result = await res.json().catch(() => ({}));
+
+      if (!res.ok || result?.success === false) {
+        const errorMessage = result?.message || 'Ошибка отправки данных';
+        showMessage('error', errorMessage);
+        return;
+      }
+
+      showMessage('success', result.message || 'Успешно');
+      if (result.success !== false) {
         nextGuestBtn?.classList.remove('hidden');
       }
     } catch (error) {
       console.error('Submit error:', error);
-      showMessage('error', 'Ошибка отправки данных');
+      showMessage('error', 'Не удалось отправить данные. Проверьте соединение.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   });
 
   nextGuestBtn.onclick = () => {
@@ -514,20 +628,27 @@ function initFlexbeApp() {
     guestInfo?.classList.add('hidden');
     newGuest?.classList.add('hidden');
     nextGuestBtn?.classList.add('hidden');
-    phone.value = '';
-    dateField.value = getDateMinusTwoDaysYMD();
+    if (phone) {
+      phone.value = '';
+      ensurePhoneMask();
+    }
+    if (dateField) {
+      dateField.value = getDateMinusTwoDaysYMD();
+      dateField.dispatchEvent(new Event('input'));
+    }
     loyaltyField.value = '1 СЕЗОН';
     loyaltyField.setAttribute('readonly', 'readonly');
     loyaltyField.classList.add('readonly-field');
     unlockAndClear();
     setDependentFieldsEnabled(false);
     searching?.classList.add('hidden');
-    phoneError?.classList.add('hidden');
+    showPhoneError();
     phoneIncomplete?.classList.add('hidden');
     hideMessage();
-    phone.focus();
+    phone?.focus();
   };
 }
+
 
 (function waitForFlexbe() {
   if (document.getElementById('enterBtn')) {
