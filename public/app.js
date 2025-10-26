@@ -195,7 +195,26 @@ function initFlexbeApp() {
   const nextGuestBtn = D('nextGuestBtn');
   const dateField = D('checkin_date');
   const loyaltyField = D('loyalty_level');
+  const form = D('checkout-form');
   let phoneMaskApplied = false;
+
+  const hideMessage = () => {
+    if (!msg) return;
+    msg.textContent = '';
+    msg.className = 'message hidden';
+  };
+
+  const showMessage = (type, text) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.className = `message ${type}`;
+  };
+
+  const setLoading = (isLoading) => {
+    if (!submitBtn) return;
+    submitBtn.disabled = isLoading;
+    submitBtn.classList.toggle('is-loading', isLoading);
+  };
 
   const ensurePhoneMask = () => {
     if (phone && !phoneMaskApplied) {
@@ -220,7 +239,7 @@ function initFlexbeApp() {
     }
   };
 
-  if (!pass || !enterBtn || !phone || !dateField || !loyaltyField || !msg) {
+  if (!pass || !enterBtn || !phone || !dateField || !loyaltyField || !msg || !form || !submitBtn) {
     setTimeout(initFlexbeApp, 300);
     return;
   }
@@ -332,20 +351,27 @@ function initFlexbeApp() {
     }
   });
 
-  phone.oninput = (event) => {
+  phone.addEventListener('input', (event) => {
     const val = event.target.value;
-    if (val.replace(/\D/g, '').length < 11) unlockAndClear();
+    if (val.replace(/\D/g, '').length < 11) {
+      unlockAndClear();
+    }
+    hideMessage();
     updateGuestInfo(val);
-  };
+  });
 
-  submitBtn.onclick = async (event) => {
+  form.addEventListener('input', hideMessage);
+
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    hideMessage();
     const phoneVal = phone.value;
     const lastNameEl = D('last_name');
     const firstNameEl = D('first_name');
     const amountEl = D('total_amount');
     const bookingEl = D('shelter_booking_id');
     const bonusEl = D('bonus_spent');
+    const phoneError = D('phone-error');
 
     const lastNameVal = lastNameEl?.value.trim();
     const firstNameVal = firstNameEl?.value.trim();
@@ -353,28 +379,21 @@ function initFlexbeApp() {
     const bookingVal = bookingEl?.value.trim();
 
     if (!isValidPhone(phoneVal)) {
-      D('phone-error')?.classList.remove('hidden');
+      phoneError?.classList.remove('hidden');
+      phone.focus();
       return;
     }
+    phoneError?.classList.add('hidden');
     if (!lastNameVal || !firstNameVal) {
-      msg.className = 'error';
-      msg.textContent = 'Фамилия и имя не могут быть пустыми';
-      msg.classList.remove('hidden');
-      setTimeout(() => msg.classList.add('hidden'), 4000);
+      showMessage('error', 'Фамилия и имя не могут быть пустыми');
       return;
     }
     if (!bookingVal) {
-      msg.className = 'error';
-      msg.textContent = 'Номер бронирования Shelter обязателен';
-      msg.classList.remove('hidden');
-      setTimeout(() => msg.classList.add('hidden'), 4000);
+      showMessage('error', 'Номер бронирования Shelter обязателен');
       return;
     }
     if (!Number.isFinite(amountVal) || amountVal <= 0) {
-      msg.className = 'error';
-      msg.textContent = 'Сумма при выезде должна быть больше 0';
-      msg.classList.remove('hidden');
-      setTimeout(() => msg.classList.add('hidden'), 4000);
+      showMessage('error', 'Сумма при выезде должна быть больше 0');
       return;
     }
 
@@ -393,6 +412,7 @@ function initFlexbeApp() {
       bonus_spent: parseFloat(bonusEl?.value || '0') || 0
     };
 
+    setLoading(true);
     try {
       const res = await fetch(API.ADD, {
         method: 'POST',
@@ -400,18 +420,17 @@ function initFlexbeApp() {
         body: JSON.stringify(data)
       });
       const result = await res.json();
-      msg.className = result.success ? 'success' : 'error';
-      msg.textContent = result.message || (result.success ? 'Успешно' : 'Ошибка');
-      msg.classList.remove('hidden');
-      if (result.success) nextGuestBtn?.classList.remove('hidden');
+      const type = result.success ? 'success' : 'error';
+      showMessage(type, result.message || (result.success ? 'Успешно' : 'Ошибка'));
+      if (result.success) {
+        nextGuestBtn?.classList.remove('hidden');
+      }
     } catch (error) {
       console.error('Submit error:', error);
-      msg.className = 'error';
-      msg.textContent = 'Ошибка отправки данных';
-      msg.classList.remove('hidden');
+      showMessage('error', 'Ошибка отправки данных');
     }
-    setTimeout(() => msg.classList.add('hidden'), 4000);
-  };
+    setLoading(false);
+  });
 
   nextGuestBtn.onclick = () => {
     document.querySelectorAll('.form-input, .form-select').forEach((el) => {
@@ -427,6 +446,9 @@ function initFlexbeApp() {
     loyaltyField.value = '1 СЕЗОН';
     loyaltyField.setAttribute('readonly', 'readonly');
     loyaltyField.classList.add('readonly-field');
+    unlockAndClear();
+    hideMessage();
+    phone.focus();
   };
 }
 
