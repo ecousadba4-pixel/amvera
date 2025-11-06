@@ -205,6 +205,39 @@ const handleUnexpectedError = (res, error, fallbackMessage) => {
   });
 };
 
+const normalizeLoyaltyLevel = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const LOYALTY_LEVELS = [
+  { normalized: '1 сезон', display: '1 СЕЗОН' },
+  { normalized: '2 сезона', display: '2 СЕЗОНА' },
+  { normalized: '3 сезона', display: '3 СЕЗОНА' },
+  { normalized: '4 сезона', display: '4 СЕЗОНА' }
+];
+
+const getNextLoyaltyLevel = (currentLevel) => {
+  const normalized = normalizeLoyaltyLevel(currentLevel);
+
+  if (!normalized) {
+    return LOYALTY_LEVELS[0].display;
+  }
+
+  const currentIndex = LOYALTY_LEVELS.findIndex(
+    (level) => level.normalized === normalized
+  );
+
+  if (currentIndex === -1) {
+    return LOYALTY_LEVELS[0].display;
+  }
+
+  const nextIndex = Math.min(currentIndex + 1, LOYALTY_LEVELS.length - 1);
+
+  return LOYALTY_LEVELS[nextIndex].display;
+};
+
 const safeTimingCompare = (candidateHash, expectedBuffer) => {
   if (!candidateHash || !expectedBuffer) {
     return false;
@@ -482,9 +515,18 @@ app.get('/api/bonuses/search', async (req, res) => {
       [normalizedPhone]
     );
 
+    const guestRecord = result.rows.length ? result.rows[0] : null;
+
+    const responseData = guestRecord
+      ? {
+          ...guestRecord,
+          loyalty_level: getNextLoyaltyLevel(guestRecord.loyalty_level)
+        }
+      : null;
+
     res.json({
       success: true,
-      data: result.rows.length ? result.rows[0] : null
+      data: responseData
     });
   } catch (error) {
     return handleUnexpectedError(res, error, 'Ошибка при поиске гостя');
