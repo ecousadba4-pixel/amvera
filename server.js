@@ -6,12 +6,14 @@ const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const crypto = require('crypto'); // Для SHA-256
 const path = require('path');
+const util = require('util');
 
 const app = express();
 
 // Переменные окружения
 const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'production';
+const IS_DEVELOPMENT = NODE_ENV === 'development';
 const DATABASE_URL = process.env.DATABASE_URL;
 const DEFAULT_BACKEND_HOST = 'u4s-loyalty-karinausadba.amvera.io';
 const AUTH_DISABLED = String(process.env.AUTH_DISABLED || '').toLowerCase() === 'true';
@@ -68,6 +70,7 @@ const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const IS_DEBUG_LOGGING_ENABLED = LOG_LEVEL === 'debug';
 const STATIC_DIR = path.join(__dirname, 'public');
 
 const normalizeHash = (hashValue) => {
@@ -88,6 +91,12 @@ const normalizeHash = (hashValue) => {
 };
 
 const PASSWORD_HASH = normalizeHash(process.env.PASSWORD_HASH);
+const PASSWORD_HASH_BUFFER = PASSWORD_HASH ? Buffer.from(PASSWORD_HASH, 'hex') : null;
+
+if (PASSWORD_HASH_BUFFER && PASSWORD_HASH_BUFFER.length !== 32) {
+  console.error('❌ PASSWORD_HASH должен быть валидным SHA-256 (64 hex-символа).');
+  process.exit(1);
+}
 
 if (!DATABASE_URL) {
   console.error('❌ Переменная окружения DATABASE_URL не задана. Сервер остановлен.');
@@ -103,6 +112,7 @@ if (!AUTH_DISABLED && !PASSWORD_HASH) {
 
 // Trust proxy для Amvera/cloud
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 // Middleware
 app.use(
@@ -151,6 +161,7 @@ app.use(cors({
 const PG_POOL_MAX = Number(process.env.PG_POOL_MAX) || 10;
 const PG_IDLE_TIMEOUT = Number(process.env.PG_IDLE_TIMEOUT) || 30_000;
 const PG_CONNECTION_TIMEOUT = Number(process.env.PG_CONNECTION_TIMEOUT) || 5_000;
+const PG_STATEMENT_TIMEOUT = Number(process.env.PG_STATEMENT_TIMEOUT) || 10_000;
 const PG_SSL_REJECT_UNAUTHORIZED = String(process.env.PG_SSL_REJECT_UNAUTHORIZED || '').toLowerCase() !== 'false';
 
 const pool = new Pool({
@@ -158,17 +169,63 @@ const pool = new Pool({
   max: PG_POOL_MAX,
   idleTimeoutMillis: PG_IDLE_TIMEOUT,
   connectionTimeoutMillis: PG_CONNECTION_TIMEOUT,
+  statement_timeout: PG_STATEMENT_TIMEOUT,
+  query_timeout: PG_STATEMENT_TIMEOUT,
   ssl: NODE_ENV === 'production' ? { rejectUnauthorized: PG_SSL_REJECT_UNAUTHORIZED } : false
 });
 
 pool.on('error', (error) => {
-  console.error('❌ Необработанная ошибка пула БД:', error.message);
+  console.error('❌ Необработанная ошибка пула БД:', error);
 });
 
 // Вспомогательная функция SHA-256
 function sha256(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
 }
+
+const respondWithError = (res, statusCode, message) =>
+  res.status(statusCode).json({
+    success: false,
+    message
+  });
+
+const respondWithValidationError = (res, message) => respondWithError(res, 400, message);
+
+const buildPublicErrorMessage = (error, fallbackMessage) =>
+  IS_DEVELOPMENT && error instanceof Error ? error.message : fallbackMessage;
+
+const handleUnexpectedError = (res, error, fallbackMessage) => {
+  if (IS_DEBUG_LOGGING_ENABLED) {
+    console.error(fallbackMessage, error);
+  }
+
+  return res.status(500).json({
+    success: false,
+    message: buildPublicErrorMessage(error, fallbackMessage)
+  });
+};
+
+const safeTimingCompare = (candidateHash, expectedBuffer) => {
+  if (!candidateHash || !expectedBuffer) {
+    return false;
+  }
+
+  try {
+    const candidateBuffer = Buffer.from(candidateHash, 'hex');
+
+    if (candidateBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(candidateBuffer, expectedBuffer);
+  } catch (error) {
+    if (IS_DEBUG_LOGGING_ENABLED) {
+      console.error('Ошибка при сравнении хеша пароля:', error);
+    }
+
+    return false;
+  }
+};
 
 function normalizeCheckinDate(dateValue) {
   if (!dateValue) {
@@ -251,20 +308,14 @@ app.post('/api/auth', (req, res) => {
   }
 
   if (!password || typeof password !== 'string') {
-    return res.status(400).json({
-      success: false,
-      message: 'Пароль обязателен'
-    });
+    return respondWithValidationError(res, 'Пароль обязателен');
   }
 
   const rawPassword = String(password);
   const trimmedPassword = rawPassword.trim();
 
   if (!trimmedPassword) {
-    return res.status(400).json({
-      success: false,
-      message: 'Пароль обязателен'
-    });
+    return respondWithValidationError(res, 'Пароль обязателен');
   }
 
   const candidatePasswords = Array.from(
@@ -284,7 +335,7 @@ app.post('/api/auth', (req, res) => {
 
   const hashMatches = candidateHashes
     .map((hash) => normalizeHash(hash))
-    .some((hash) => hash === PASSWORD_HASH);
+    .some((hash) => safeTimingCompare(hash, PASSWORD_HASH_BUFFER));
 
   if (hashMatches) {
     return res.status(200).json({
@@ -314,18 +365,15 @@ app.post('/api/guests', async (req, res) => {
     } = req.body;
 
     if (!guest_phone || !last_name || !first_name || !shelter_booking_id || !total_amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Заполните обязательные поля: телефон, фамилия, имя, номер бронирования и сумму.'
-      });
+      return respondWithValidationError(
+        res,
+        'Заполните обязательные поля: телефон, фамилия, имя, номер бронирования и сумму.'
+      );
     }
 
     const normalizedPhoneDigits = String(guest_phone).replace(/\D/g, '');
     if (normalizedPhoneDigits.length < 10) {
-      return res.status(400).json({
-        success: false,
-        message: 'Укажите корректный номер телефона гостя.'
-      });
+      return respondWithValidationError(res, 'Укажите корректный номер телефона гостя.');
     }
     const phoneToStore = normalizedPhoneDigits.slice(-10);
 
@@ -336,62 +384,41 @@ app.post('/api/guests', async (req, res) => {
     const normalizedDate = normalizeCheckinDate(checkin_date);
 
     if (!lastNameSanitized || !firstNameSanitized) {
-      return res.status(400).json({
-        success: false,
-        message: 'Фамилия и имя не могут быть пустыми.'
-      });
+      return respondWithValidationError(res, 'Фамилия и имя не могут быть пустыми.');
     }
 
     if (lastNameSanitized.length > 120 || firstNameSanitized.length > 120) {
-      return res.status(400).json({
-        success: false,
-        message: 'Фамилия и имя не должны превышать 120 символов.'
-      });
+      return respondWithValidationError(res, 'Фамилия и имя не должны превышать 120 символов.');
     }
 
     if (!bookingSanitized) {
-      return res.status(400).json({
-        success: false,
-        message: 'Укажите номер бронирования Shelter.'
-      });
+      return respondWithValidationError(res, 'Укажите номер бронирования Shelter.');
     }
 
     if (bookingSanitized.length > 80) {
-      return res.status(400).json({
-        success: false,
-        message: 'Номер бронирования слишком длинный.'
-      });
+      return respondWithValidationError(res, 'Номер бронирования слишком длинный.');
     }
 
     if (!normalizedDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'Некорректный формат даты заезда.'
-      });
+      return respondWithValidationError(res, 'Некорректный формат даты заезда.');
     }
 
     if (Number.isNaN(Date.parse(normalizedDate))) {
-      return res.status(400).json({
-        success: false,
-        message: 'Дата заезда не распознана.'
-      });
+      return respondWithValidationError(res, 'Дата заезда не распознана.');
     }
 
     const amount = Number.parseFloat(total_amount);
     if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Сумма при выезде должна быть положительным числом не более 1 000 000.'
-      });
+      return respondWithValidationError(
+        res,
+        'Сумма при выезде должна быть положительным числом не более 1 000 000.'
+      );
     }
 
     const bonusValueRaw = Number.parseInt(bonus_spent, 10);
     const bonusValue = Number.isFinite(bonusValueRaw) && bonusValueRaw > 0 ? bonusValueRaw : 0;
     if (bonusValue > 1_000_000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Списанные баллы не могут превышать 1 000 000.'
-      });
+      return respondWithValidationError(res, 'Списанные баллы не могут превышать 1 000 000.');
     }
 
     const query = `
@@ -421,11 +448,7 @@ app.post('/api/guests', async (req, res) => {
       data: result.rows[0]
     });
   } catch (error) {
-    if (LOG_LEVEL === 'debug') console.error('Ошибка при добавлении гостя:', error);
-    res.status(500).json({
-      success: false,
-      message: NODE_ENV === 'development' ? error.message : '❌ Ошибка при добавлении гостя'
-    });
+    return handleUnexpectedError(res, error, '❌ Ошибка при добавлении гостя');
   }
 });
 
@@ -434,17 +457,11 @@ app.get('/api/bonuses/search', async (req, res) => {
   try {
     const { phone } = req.query;
     if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Не указан номер телефона для поиска'
-      });
+      return respondWithValidationError(res, 'Не указан номер телефона для поиска');
     }
     const digits = String(phone).replace(/\D/g, '');
     if (digits.length < 10) {
-      return res.status(400).json({
-        success: false,
-        message: 'Неверный формат номера телефона'
-      });
+      return respondWithValidationError(res, 'Неверный формат номера телефона');
     }
 
     const normalizedPhone = digits.slice(-10);
@@ -470,11 +487,7 @@ app.get('/api/bonuses/search', async (req, res) => {
       data: result.rows.length ? result.rows[0] : null
     });
   } catch (error) {
-    if (LOG_LEVEL === 'debug') console.error('Ошибка при поиске гостя в bonuses_balance:', error);
-    res.status(500).json({
-      success: false,
-      message: NODE_ENV === 'development' ? error.message : 'Ошибка при поиске гостя'
-    });
+    return handleUnexpectedError(res, error, 'Ошибка при поиске гостя');
   }
 });
 
@@ -487,11 +500,7 @@ app.get('/api/guests', async (req, res) => {
       data: result.rows
     });
   } catch (error) {
-    if (LOG_LEVEL === 'debug') console.error('Ошибка при получении гостей:', error);
-    res.status(500).json({
-      success: false,
-      message: NODE_ENV === 'development' ? error.message : 'Ошибка при получении списка гостей'
-    });
+    return handleUnexpectedError(res, error, 'Ошибка при получении списка гостей');
   }
 });
 
@@ -504,11 +513,7 @@ app.get('/api/bonuses', async (req, res) => {
       data: result.rows
     });
   } catch (error) {
-    if (LOG_LEVEL === 'debug') console.error('Ошибка при получении данных bonuses_balance:', error);
-    res.status(500).json({
-      success: false,
-      message: NODE_ENV === 'development' ? error.message : 'Ошибка при получении данных бонусов'
-    });
+    return handleUnexpectedError(res, error, 'Ошибка при получении данных бонусов');
   }
 });
 
@@ -522,16 +527,67 @@ app.use('*', (req, res) => {
 
 // Обработчик ошибок
 app.use((error, req, res, next) => {
-  if (LOG_LEVEL === 'debug') console.error('Необработанная ошибка:', error);
+  if (IS_DEBUG_LOGGING_ENABLED) console.error('Необработанная ошибка:', error);
   res.status(500).json({
     success: false,
-    message: NODE_ENV === 'development' ? error.message : 'Внутренняя ошибка сервера'
+    message: buildPublicErrorMessage(error, 'Внутренняя ошибка сервера')
   });
 });
 
 // Запуск
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на Amvera, порт ${PORT}`);
   console.log(`📍 Health check: /health`);
   console.log(`📍 Allowed origins: ${UNIQUE_ALLOWED_ORIGINS.join(', ')}`);
 });
+
+const closeServer = util.promisify(server.close.bind(server));
+
+const setupGracefulShutdown = () => {
+  let isShuttingDown = false;
+
+  const shutdown = async (signal, error) => {
+    if (isShuttingDown) {
+      return;
+    }
+
+    isShuttingDown = true;
+
+    if (error) {
+      console.error(`Получена ошибка ${signal}, завершаем работу:`, error);
+    } else {
+      console.log(`Получен сигнал ${signal}, начинаем корректное завершение.`);
+    }
+
+    try {
+      await closeServer();
+      console.log('HTTP-сервер остановлен.');
+    } catch (closeError) {
+      console.error('Ошибка при остановке HTTP-сервера:', closeError);
+    }
+
+    try {
+      await pool.end();
+      console.log('Пул подключений к БД закрыт.');
+    } catch (poolError) {
+      console.error('Ошибка при закрытии пула БД:', poolError);
+    } finally {
+      process.exit(error ? 1 : 0);
+    }
+  };
+
+  ['SIGINT', 'SIGTERM'].forEach((signal) => {
+    process.on(signal, () => shutdown(signal));
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const rejectionError = reason instanceof Error ? reason : new Error(String(reason));
+    shutdown('unhandledRejection', rejectionError);
+  });
+
+  process.on('uncaughtException', (uncaughtError) => {
+    shutdown('uncaughtException', uncaughtError);
+  });
+};
+
+setupGracefulShutdown();
