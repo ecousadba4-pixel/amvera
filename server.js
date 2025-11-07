@@ -3,10 +3,8 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
-const csrf = require('csurf');
-const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
-const { z } = require('zod');
+const crypto = require('crypto'); // Для SHA-256
 const path = require('path');
 const util = require('util');
 
@@ -71,19 +69,32 @@ const isOriginAllowed = (origin) => {
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'default_cookie_secret';
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 100;
-const AUTH_RATE_LIMIT_WINDOW = Number(process.env.AUTH_RATE_LIMIT_WINDOW) || 15 * 60 * 1000;
-const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX) || 10;
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const IS_DEBUG_LOGGING_ENABLED = LOG_LEVEL === 'debug';
 const STATIC_DIR = path.join(__dirname, 'public');
 
-const PASSWORD_HASH_RAW =
-  typeof process.env.PASSWORD_HASH === 'string' ? process.env.PASSWORD_HASH.trim() : '';
-const PASSWORD_HASH = PASSWORD_HASH_RAW || null;
-const BCRYPT_HASH_REGEX = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+const normalizeHash = (hashValue) => {
+  if (typeof hashValue !== 'string') {
+    return undefined;
+  }
 
-if (PASSWORD_HASH && !BCRYPT_HASH_REGEX.test(PASSWORD_HASH)) {
-  console.error('❌ PASSWORD_HASH должен быть валидным bcrypt-хешем.');
+  let normalized = hashValue.trim().toLowerCase().replace(/\s+/g, '');
+
+  normalized = normalized.replace(/^(sha-?256[:=]?)/, '');
+  normalized = normalized.replace(/^0x/, '');
+
+  if (!/^[a-f0-9]{64}$/i.test(normalized)) {
+    return undefined;
+  }
+
+  return normalized;
+};
+
+const PASSWORD_HASH = normalizeHash(process.env.PASSWORD_HASH);
+const PASSWORD_HASH_BUFFER = PASSWORD_HASH ? Buffer.from(PASSWORD_HASH, 'hex') : null;
+
+if (PASSWORD_HASH_BUFFER && PASSWORD_HASH_BUFFER.length !== 32) {
+  console.error('❌ PASSWORD_HASH должен быть валидным SHA-256 (64 hex-символа).');
   process.exit(1);
 }
 
@@ -132,17 +143,6 @@ const apiRateLimiter = rateLimit({
 });
 app.use(apiRateLimiter);
 
-const authRateLimiter = rateLimit({
-  windowMs: AUTH_RATE_LIMIT_WINDOW,
-  max: AUTH_RATE_LIMIT_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: 'Слишком много попыток входа, попробуйте позже.'
-  }
-});
-
 // CORS
 app.use(cors({
   origin: (origin, callback) => {
@@ -156,17 +156,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
-
-const csrfProtection = csrf({
-  cookie: {
-    key: 'csrf_token',
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: NODE_ENV === 'production'
-  }
-});
-
-app.use('/api', csrfProtection);
 
 // Подключение к БД
 const PG_POOL_MAX = Number(process.env.PG_POOL_MAX) || 10;
@@ -189,6 +178,11 @@ pool.on('error', (error) => {
   console.error('❌ Необработанная ошибка пула БД:', error);
 });
 
+// Вспомогательная функция SHA-256
+function sha256(str) {
+  return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
 const respondWithError = (res, statusCode, message) =>
   res.status(statusCode).json({
     success: false,
@@ -209,37 +203,6 @@ const handleUnexpectedError = (res, error, fallbackMessage) => {
     success: false,
     message: buildPublicErrorMessage(error, fallbackMessage)
   });
-};
-
-class RequestValidationError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'RequestValidationError';
-  }
-}
-
-const parseWithSchema = (schema, payload) => {
-  const result = schema.safeParse(payload);
-
-  if (!result.success) {
-    const firstIssue = result.error.issues[0];
-    const message = firstIssue?.message || 'Переданы некорректные данные.';
-    throw new RequestValidationError(message);
-  }
-
-  return result.data;
-};
-
-const toStringSafe = (value) => {
-  if (Array.isArray(value)) {
-    return toStringSafe(value[0]);
-  }
-
-  if (value === undefined || value === null) {
-    return '';
-  }
-
-  return String(value);
 };
 
 const normalizeLoyaltyLevel = (value) =>
@@ -275,6 +238,28 @@ const getNextLoyaltyLevel = (currentLevel) => {
   return LOYALTY_LEVELS[nextIndex].display;
 };
 
+const safeTimingCompare = (candidateHash, expectedBuffer) => {
+  if (!candidateHash || !expectedBuffer) {
+    return false;
+  }
+
+  try {
+    const candidateBuffer = Buffer.from(candidateHash, 'hex');
+
+    if (candidateBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(candidateBuffer, expectedBuffer);
+  } catch (error) {
+    if (IS_DEBUG_LOGGING_ENABLED) {
+      console.error('Ошибка при сравнении хеша пароля:', error);
+    }
+
+    return false;
+  }
+};
+
 function normalizeCheckinDate(dateValue) {
   if (!dateValue) {
     return null;
@@ -308,216 +293,6 @@ function normalizeCheckinDate(dateValue) {
   return null;
 }
 
-const authSchema = z
-  .object({
-    password: z
-      .string({ required_error: 'Пароль обязателен' })
-      .trim()
-      .min(1, { message: 'Пароль обязателен' })
-      .max(512, { message: 'Пароль слишком длинный' })
-  })
-  .strict();
-
-const createGuestSchema = z
-  .object({
-    guest_phone: z.any(),
-    last_name: z.any(),
-    first_name: z.any(),
-    checkin_date: z.any(),
-    loyalty_level: z.any().optional(),
-    shelter_booking_id: z.any(),
-    total_amount: z.any(),
-    bonus_spent: z.any().optional()
-  })
-  .strict()
-  .transform((raw, ctx) => {
-    let hasError = false;
-
-    const rawPhone = toStringSafe(raw.guest_phone);
-    if (!rawPhone) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['guest_phone'],
-        message: 'Укажите номер телефона гостя.'
-      });
-      hasError = true;
-    }
-
-    const digits = rawPhone.replace(/\D/g, '');
-    if (digits.length < 10) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['guest_phone'],
-        message: 'Укажите корректный номер телефона гостя.'
-      });
-      hasError = true;
-    }
-
-    const lastName = toStringSafe(raw.last_name).trim();
-    if (!lastName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['last_name'],
-        message: 'Фамилия обязательна.'
-      });
-      hasError = true;
-    } else if (lastName.length > 120) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['last_name'],
-        message: 'Фамилия не должна превышать 120 символов.'
-      });
-      hasError = true;
-    }
-
-    const firstName = toStringSafe(raw.first_name).trim();
-    if (!firstName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['first_name'],
-        message: 'Имя обязательно.'
-      });
-      hasError = true;
-    } else if (firstName.length > 120) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['first_name'],
-        message: 'Имя не должно превышать 120 символов.'
-      });
-      hasError = true;
-    }
-
-    const bookingId = toStringSafe(raw.shelter_booking_id).trim();
-    if (!bookingId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['shelter_booking_id'],
-        message: 'Укажите номер бронирования Shelter.'
-      });
-      hasError = true;
-    } else if (bookingId.length > 80) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['shelter_booking_id'],
-        message: 'Номер бронирования слишком длинный.'
-      });
-      hasError = true;
-    }
-
-    const loyaltyLevelRaw = toStringSafe(raw.loyalty_level).trim();
-    if (loyaltyLevelRaw && loyaltyLevelRaw.length > 120) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['loyalty_level'],
-        message: 'Уровень лояльности не должен превышать 120 символов.'
-      });
-      hasError = true;
-    }
-
-    const normalizedDate = normalizeCheckinDate(raw.checkin_date);
-    if (!normalizedDate) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['checkin_date'],
-        message: 'Некорректный формат даты заезда.'
-      });
-      hasError = true;
-    } else if (Number.isNaN(Date.parse(normalizedDate))) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['checkin_date'],
-        message: 'Дата заезда не распознана.'
-      });
-      hasError = true;
-    }
-
-    const totalAmountRaw = toStringSafe(raw.total_amount);
-    const amount = Number.parseFloat(totalAmountRaw);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['total_amount'],
-        message: 'Сумма при выезде должна быть положительным числом не более 1 000 000.'
-      });
-      hasError = true;
-    }
-
-    let bonusValue = 0;
-    const bonusRaw = toStringSafe(raw.bonus_spent).trim();
-    if (bonusRaw) {
-      const parsedBonus = Number.parseInt(bonusRaw, 10);
-      if (!Number.isFinite(parsedBonus) || parsedBonus < 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['bonus_spent'],
-          message: 'Списанные баллы должны быть неотрицательным числом.'
-        });
-        hasError = true;
-      } else if (parsedBonus > 1_000_000) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['bonus_spent'],
-          message: 'Списанные баллы не могут превышать 1 000 000.'
-        });
-        hasError = true;
-      } else {
-        bonusValue = parsedBonus;
-      }
-    }
-
-    if (hasError) {
-      return z.NEVER;
-    }
-
-    return {
-      phone: digits.slice(-10),
-      lastName,
-      firstName,
-      bookingId,
-      loyaltyLevel: loyaltyLevelRaw || null,
-      checkinDate: normalizedDate,
-      totalAmount: amount,
-      bonusSpent: bonusValue
-    };
-  });
-
-const bonusSearchSchema = z
-  .object({
-    phone: z.any()
-  })
-  .strict()
-  .transform((raw, ctx) => {
-    let hasError = false;
-
-    const rawPhone = toStringSafe(raw.phone);
-    if (!rawPhone) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['phone'],
-        message: 'Не указан номер телефона для поиска.'
-      });
-      hasError = true;
-    }
-
-    const digits = rawPhone.replace(/\D/g, '');
-    if (digits.length < 10) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['phone'],
-        message: 'Неверный формат номера телефона.'
-      });
-      hasError = true;
-    }
-
-    if (hasError) {
-      return z.NEVER;
-    }
-
-    return {
-      phone: digits.slice(-10)
-    };
-  });
-
 // === ЭНДПОИНТЫ ===
 
 // Health-check
@@ -544,13 +319,6 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.get('/api/csrf-token', (req, res) => {
-  res.json({
-    success: true,
-    csrfToken: req.csrfToken()
-  });
-});
-
 // Главная страница
 app.get('/', (req, res) => {
   res.json({
@@ -562,68 +330,129 @@ app.get('/', (req, res) => {
 });
 
 // 🔐 Аутентификация (новый эндпоинт)
-app.post('/api/auth', authRateLimiter, async (req, res) => {
-  try {
-    if (AUTH_DISABLED) {
-      return res.status(200).json({
-        success: true,
-        message: 'Авторизация отключена администратором'
-      });
-    }
+app.post('/api/auth', (req, res) => {
+  const { password } = req.body;
 
-    const rawPassword =
-      typeof req.body?.password === 'string' ? req.body.password : undefined;
-    const { password } = parseWithSchema(authSchema, req.body);
+  if (AUTH_DISABLED) {
+    return res.status(200).json({
+      success: true,
+      message: 'Авторизация отключена администратором'
+    });
+  }
 
-    if (!PASSWORD_HASH) {
-      console.error('❌ Не задан PASSWORD_HASH для проверки пароля');
-      return res.status(500).json({
-        success: false,
-        message: 'Ошибка конфигурации сервера'
-      });
-    }
+  if (!password || typeof password !== 'string') {
+    return respondWithValidationError(res, 'Пароль обязателен');
+  }
 
-    const candidatePasswords = Array.from(
-      new Set(
-        [rawPassword, password]
-          .map((value) => (typeof value === 'string' ? value : ''))
-          .filter((value) => value.length > 0)
-      )
-    );
+  const rawPassword = String(password);
+  const trimmedPassword = rawPassword.trim();
 
-    let passwordMatches = false;
+  if (!trimmedPassword) {
+    return respondWithValidationError(res, 'Пароль обязателен');
+  }
 
-    for (const candidate of candidatePasswords) {
-      if (await bcrypt.compare(candidate, PASSWORD_HASH)) {
-        passwordMatches = true;
-        break;
-      }
-    }
+  const candidatePasswords = Array.from(
+    new Set(
+      [rawPassword, trimmedPassword].filter(pw => typeof pw === 'string' && pw.length > 0)
+    )
+  );
+  const candidateHashes = candidatePasswords.map(pw => sha256(pw));
 
-    if (passwordMatches) {
-      return res.status(200).json({
-        success: true,
-        message: 'Доступ разрешён'
-      });
-    }
+  if (!PASSWORD_HASH) {
+    console.error('❌ Не задан PASSWORD_HASH для проверки пароля');
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка конфигурации сервера'
+    });
+  }
 
+  const hashMatches = candidateHashes
+    .map((hash) => normalizeHash(hash))
+    .some((hash) => safeTimingCompare(hash, PASSWORD_HASH_BUFFER));
+
+  if (hashMatches) {
+    return res.status(200).json({
+      success: true,
+      message: 'Доступ разрешён'
+    });
+  } else {
     return res.status(401).json({
       success: false,
       message: 'Неверный пароль'
     });
-  } catch (error) {
-    if (error instanceof RequestValidationError) {
-      return respondWithValidationError(res, error.message);
-    }
-
-    return handleUnexpectedError(res, error, 'Ошибка при проверке пароля');
   }
 });
 
 // Добавление гостя
 app.post('/api/guests', async (req, res) => {
   try {
-    const guestData = parseWithSchema(createGuestSchema, req.body);
+    const {
+      guest_phone,
+      last_name,
+      first_name,
+      checkin_date,
+      loyalty_level,
+      shelter_booking_id,
+      total_amount,
+      bonus_spent
+    } = req.body;
+
+    if (!guest_phone || !last_name || !first_name || !shelter_booking_id || !total_amount) {
+      return respondWithValidationError(
+        res,
+        'Заполните обязательные поля: телефон, фамилия, имя, номер бронирования и сумму.'
+      );
+    }
+
+    const normalizedPhoneDigits = String(guest_phone).replace(/\D/g, '');
+    if (normalizedPhoneDigits.length < 10) {
+      return respondWithValidationError(res, 'Укажите корректный номер телефона гостя.');
+    }
+    const phoneToStore = normalizedPhoneDigits.slice(-10);
+
+    const lastNameSanitized = String(last_name).trim();
+    const firstNameSanitized = String(first_name).trim();
+    const bookingSanitized = String(shelter_booking_id).trim();
+    const loyaltySanitized = String(loyalty_level || '').trim();
+    const normalizedDate = normalizeCheckinDate(checkin_date);
+
+    if (!lastNameSanitized || !firstNameSanitized) {
+      return respondWithValidationError(res, 'Фамилия и имя не могут быть пустыми.');
+    }
+
+    if (lastNameSanitized.length > 120 || firstNameSanitized.length > 120) {
+      return respondWithValidationError(res, 'Фамилия и имя не должны превышать 120 символов.');
+    }
+
+    if (!bookingSanitized) {
+      return respondWithValidationError(res, 'Укажите номер бронирования Shelter.');
+    }
+
+    if (bookingSanitized.length > 80) {
+      return respondWithValidationError(res, 'Номер бронирования слишком длинный.');
+    }
+
+    if (!normalizedDate) {
+      return respondWithValidationError(res, 'Некорректный формат даты заезда.');
+    }
+
+    if (Number.isNaN(Date.parse(normalizedDate))) {
+      return respondWithValidationError(res, 'Дата заезда не распознана.');
+    }
+
+    const amount = Number.parseFloat(total_amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      return respondWithValidationError(
+        res,
+        'Сумма при выезде должна быть положительным числом не более 1 000 000.'
+      );
+    }
+
+    const bonusValueRaw = Number.parseInt(bonus_spent, 10);
+    const bonusValue = Number.isFinite(bonusValueRaw) && bonusValueRaw > 0 ? bonusValueRaw : 0;
+    if (bonusValue > 1_000_000) {
+      return respondWithValidationError(res, 'Списанные баллы не могут превышать 1 000 000.');
+    }
 
     const query = `
       INSERT INTO guests
@@ -634,14 +463,14 @@ app.post('/api/guests', async (req, res) => {
     `;
 
     const values = [
-      guestData.phone,
-      guestData.lastName,
-      guestData.firstName,
-      guestData.checkinDate,
-      guestData.loyaltyLevel,
-      guestData.bookingId,
-      guestData.totalAmount,
-      guestData.bonusSpent
+      phoneToStore,
+      lastNameSanitized,
+      firstNameSanitized,
+      normalizedDate,
+      loyaltySanitized || null,
+      bookingSanitized,
+      amount,
+      bonusValue
     ];
 
     const result = await pool.query(query, values);
@@ -652,10 +481,6 @@ app.post('/api/guests', async (req, res) => {
       data: result.rows[0]
     });
   } catch (error) {
-    if (error instanceof RequestValidationError) {
-      return respondWithValidationError(res, error.message);
-    }
-
     return handleUnexpectedError(res, error, '❌ Ошибка при добавлении гостя');
   }
 });
@@ -663,7 +488,16 @@ app.post('/api/guests', async (req, res) => {
 // Поиск бонусов по телефону
 app.get('/api/bonuses/search', async (req, res) => {
   try {
-    const { phone } = parseWithSchema(bonusSearchSchema, req.query);
+    const { phone } = req.query;
+    if (!phone) {
+      return respondWithValidationError(res, 'Не указан номер телефона для поиска');
+    }
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length < 10) {
+      return respondWithValidationError(res, 'Неверный формат номера телефона');
+    }
+
+    const normalizedPhone = digits.slice(-10);
 
     const result = await pool.query(
       `SELECT
@@ -678,7 +512,7 @@ app.get('/api/bonuses/search', async (req, res) => {
       WHERE phone = $1
       ORDER BY last_date_visit DESC
       LIMIT 1`,
-      [phone]
+      [normalizedPhone]
     );
 
     const guestRecord = result.rows.length ? result.rows[0] : null;
@@ -695,10 +529,6 @@ app.get('/api/bonuses/search', async (req, res) => {
       data: responseData
     });
   } catch (error) {
-    if (error instanceof RequestValidationError) {
-      return respondWithValidationError(res, error.message);
-    }
-
     return handleUnexpectedError(res, error, 'Ошибка при поиске гостя');
   }
 });
@@ -735,18 +565,6 @@ app.use('*', (req, res) => {
     success: false,
     message: '🚫 Маршрут не найден'
   });
-});
-
-// Обработчик ошибок CSRF
-app.use((error, req, res, next) => {
-  if (error && error.code === 'EBADCSRFTOKEN') {
-    return res.status(403).json({
-      success: false,
-      message: 'Недействительный CSRF токен'
-    });
-  }
-
-  return next(error);
 });
 
 // Обработчик ошибок
