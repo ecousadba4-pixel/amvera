@@ -23,10 +23,7 @@
     "pg": "^8.11.3",
     "cookie-parser": "^1.4.6",
     "express-rate-limit": "^7.0.0",
-    "helmet": "^7.0.0",
-    "bcrypt": "^5.1.1",
-    "csurf": "^1.11.0",
-    "zod": "^3.22.4"
+    "helmet": "^7.0.0"
   },
   "engines": {
     "node": "18.x",
