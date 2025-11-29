@@ -7,6 +7,7 @@ const { Pool } = require('pg');
 const crypto = require('crypto'); // Для SHA-256
 const path = require('path');
 const util = require('util');
+const client = require('prom-client'); // Prometheus metrics
 
 const app = express();
 
@@ -114,6 +115,33 @@ if (!AUTH_DISABLED && !PASSWORD_HASH) {
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
+// === Prometheus metrics ===
+client.collectDefaultMetrics({
+  prefix: 'loyalty_api_'
+});
+
+// Гистограмма по HTTP-запросам
+const httpRequestDuration = new client.Histogram({
+  name: 'loyalty_api_http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+});
+
+// Middleware для измерения времени ответа
+app.use((req, res, next) => {
+  const end = httpRequestDuration.startTimer();
+  res.on('finish', () => {
+    const route = (req.route && req.route.path) || req.path || 'unknown';
+    end({
+      method: req.method,
+      route,
+      status_code: res.statusCode
+    });
+  });
+  next();
+});
+
 // Middleware
 app.use(
   helmet({
@@ -130,7 +158,7 @@ app.get('/app', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'index.html'));
 });
 
-// Rate limiting
+// Rate limiting: применяем только к /api/*
 const apiRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW,
   max: RATE_LIMIT_MAX,
@@ -141,28 +169,31 @@ const apiRateLimiter = rateLimit({
     message: 'Слишком много запросов, попробуйте позже.'
   }
 });
-app.use(apiRateLimiter);
+app.use('/api', apiRateLimiter);
 
 // CORS
-app.use(cors({
-  origin: (origin, callback) => {
-    if (isOriginAllowed(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Origin not allowed by CORS policy'), false);
-    }
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Origin not allowed by CORS policy'), false);
+      }
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+  })
+);
 
 // Подключение к БД
 const PG_POOL_MAX = Number(process.env.PG_POOL_MAX) || 10;
 const PG_IDLE_TIMEOUT = Number(process.env.PG_IDLE_TIMEOUT) || 30_000;
 const PG_CONNECTION_TIMEOUT = Number(process.env.PG_CONNECTION_TIMEOUT) || 5_000;
 const PG_STATEMENT_TIMEOUT = Number(process.env.PG_STATEMENT_TIMEOUT) || 10_000;
-const PG_SSL_REJECT_UNAUTHORIZED = String(process.env.PG_SSL_REJECT_UNAUTHORIZED || '').toLowerCase() !== 'false';
+const PG_SSL_REJECT_UNAUTHORIZED = String(process.env.PG_SSL_REJECT_UNAUTHORIZED || '')
+  .toLowerCase() !== 'false';
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -313,6 +344,18 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// Эндпоинт метрик для Prometheus
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', client.register.contentType);
+    const metrics = await client.register.metrics();
+    res.send(metrics);
+  } catch (error) {
+    console.error('Ошибка при формировании метрик:', error);
+    res.status(500).end('Metrics collection error');
+  }
+});
+
 app.get('/api/config', (req, res) => {
   res.json({
     authDisabled: AUTH_DISABLED
@@ -353,10 +396,12 @@ app.post('/api/auth', (req, res) => {
 
   const candidatePasswords = Array.from(
     new Set(
-      [rawPassword, trimmedPassword].filter(pw => typeof pw === 'string' && pw.length > 0)
+      [rawPassword, trimmedPassword].filter(
+        (pw) => typeof pw === 'string' && pw.length > 0
+      )
     )
   );
-  const candidateHashes = candidatePasswords.map(pw => sha256(pw));
+  const candidateHashes = candidatePasswords.map((pw) => sha256(pw));
 
   if (!PASSWORD_HASH) {
     console.error('❌ Не задан PASSWORD_HASH для проверки пароля');
@@ -406,7 +451,10 @@ app.post('/api/guests', async (req, res) => {
 
     const normalizedPhoneDigits = String(guest_phone).replace(/\D/g, '');
     if (normalizedPhoneDigits.length < 10) {
-      return respondWithValidationError(res, 'Укажите корректный номер телефона гостя.');
+      return respondWithValidationError(
+        res,
+        'Укажите корректный номер телефона гостя.'
+      );
     }
     const phoneToStore = normalizedPhoneDigits.slice(-10);
 
@@ -417,19 +465,31 @@ app.post('/api/guests', async (req, res) => {
     const normalizedDate = normalizeCheckinDate(checkin_date);
 
     if (!lastNameSanitized || !firstNameSanitized) {
-      return respondWithValidationError(res, 'Фамилия и имя не могут быть пустыми.');
+      return respondWithValidationError(
+        res,
+        'Фамилия и имя не могут быть пустыми.'
+      );
     }
 
     if (lastNameSanitized.length > 120 || firstNameSanitized.length > 120) {
-      return respondWithValidationError(res, 'Фамилия и имя не должны превышать 120 символов.');
+      return respondWithValidationError(
+        res,
+        'Фамилия и имя не должны превышать 120 символов.'
+      );
     }
 
     if (!bookingSanitized) {
-      return respondWithValidationError(res, 'Укажите номер бронирования Shelter.');
+      return respondWithValidationError(
+        res,
+        'Укажите номер бронирования Shelter.'
+      );
     }
 
     if (bookingSanitized.length > 80) {
-      return respondWithValidationError(res, 'Номер бронирования слишком длинный.');
+      return respondWithValidationError(
+        res,
+        'Номер бронирования слишком длинный.'
+      );
     }
 
     if (!normalizedDate) {
@@ -451,7 +511,10 @@ app.post('/api/guests', async (req, res) => {
     const bonusValueRaw = Number.parseInt(bonus_spent, 10);
     const bonusValue = Number.isFinite(bonusValueRaw) && bonusValueRaw > 0 ? bonusValueRaw : 0;
     if (bonusValue > 1_000_000) {
-      return respondWithValidationError(res, 'Списанные баллы не могут превышать 1 000 000.');
+      return respondWithValidationError(
+        res,
+        'Списанные баллы не могут превышать 1 000 000.'
+      );
     }
 
     const query = `
@@ -536,7 +599,9 @@ app.get('/api/bonuses/search', async (req, res) => {
 // Получение всех гостей (админ)
 app.get('/api/guests', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM guests ORDER BY created_at DESC LIMIT 100');
+    const result = await pool.query(
+      'SELECT * FROM guests ORDER BY created_at DESC LIMIT 100'
+    );
     res.json({
       success: true,
       data: result.rows
@@ -549,7 +614,9 @@ app.get('/api/guests', async (req, res) => {
 // Получение всех бонусов (админ)
 app.get('/api/bonuses', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM bonuses_balance ORDER BY last_date_visit DESC LIMIT 100');
+    const result = await pool.query(
+      'SELECT * FROM bonuses_balance ORDER BY last_date_visit DESC LIMIT 100'
+    );
     res.json({
       success: true,
       data: result.rows
@@ -623,7 +690,8 @@ const setupGracefulShutdown = () => {
   });
 
   process.on('unhandledRejection', (reason) => {
-    const rejectionError = reason instanceof Error ? reason : new Error(String(reason));
+    const rejectionError =
+      reason instanceof Error ? reason : new Error(String(reason));
     shutdown('unhandledRejection', rejectionError);
   });
 
@@ -633,4 +701,3 @@ const setupGracefulShutdown = () => {
 };
 
 setupGracefulShutdown();
-
