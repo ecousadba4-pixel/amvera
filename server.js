@@ -116,9 +116,7 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // === Prometheus metrics ===
-client.collectDefaultMetrics({
-  prefix: 'loyalty_api_'
-});
+client.collectDefaultMetrics();
 
 // Гистограмма по HTTP-запросам
 const httpRequestDuration = new client.Histogram({
@@ -701,3 +699,4 @@ const setupGracefulShutdown = () => {
 };
 
 setupGracefulShutdown();
+
