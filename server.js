@@ -15,7 +15,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'production';
 const IS_DEVELOPMENT = NODE_ENV === 'development';
 const DATABASE_URL = process.env.DATABASE_URL;
-const DEFAULT_BACKEND_HOST = 'u4s-loyalty-karinausadba.amvera.io';
+const DEFAULT_BACKEND_HOST = 'loyalty-api.usadba4.ru';
 const AUTH_DISABLED = String(process.env.AUTH_DISABLED || '').toLowerCase() === 'true';
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -633,3 +633,4 @@ const setupGracefulShutdown = () => {
 };
 
 setupGracefulShutdown();
+
